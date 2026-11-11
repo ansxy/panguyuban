@@ -1,0 +1,26 @@
+[package]
+name = "panguyuban-desktop"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "panguyuban_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+async-trait = "0.1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+dirs = "5"
+keyring = { version = "3", features = ["apple-native", "windows-native"] }
+libc = "0.2"
+panguyuban-core = { path = "../../../crates/panguyuban-core" }
+provider-github = { path = "../../../crates/provider-github" }
+provider-plane = { path = "../../../crates/provider-plane" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tauri = { version = "2", features = [] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

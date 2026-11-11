@@ -1,0 +1,523 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Panguyuban: Plane Ticket and GitHub Pull Request Console</title>
+  <meta name="description" content="Panguyuban desktop workflow application built on Tauri and Rust for managing Plane tickets, reviewing GitHub pull requests, and merging ready branches.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Mono:wght@400;500&family=Host+Grotesk:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="./app.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="topbar-brand">
+        <a href="#tickets" class="wordmark" aria-label="Panguyuban home">Panguyuban</a>
+        <span class="chip chip--instrument" role="status">Plane: panguyuban-core</span>
+        <span class="chip chip--instrument" role="status">GitHub: ansar/panguyuban</span>
+      </div>
+
+      <div class="topbar-controls" role="group" aria-label="View state simulation">
+        <button type="button" class="btn" id="state-full" onclick="setDataState('full')">Live state</button>
+        <button type="button" class="btn" id="state-loading" onclick="setDataState('loading')">Loading state</button>
+        <button type="button" class="btn" id="state-empty" onclick="setDataState('empty')">Empty state</button>
+        <button type="button" class="btn" id="state-error" onclick="setDataState('error')">Error state</button>
+      </div>
+    </header>
+
+    <div class="workspace-grid">
+      <aside class="sidebar" aria-label="Workspace navigation">
+        <div class="nav-stack">
+          <div class="nav-group" role="group" aria-labelledby="nav-tickets-heading">
+            <div class="nav-group-head" id="nav-tickets-heading">
+              <span>Tickets (Plane.so)</span>
+              <span class="measured">04</span>
+            </div>
+            <button type="button" class="nav-btn" id="menu-tickets-assigned" aria-current="page" onclick="selectMenu('tickets', 'assigned')">
+              <span>Assigned to me</span>
+              <span class="measured">03</span>
+            </button>
+            <button type="button" class="nav-btn" id="menu-tickets-backlog" onclick="selectMenu('tickets', 'backlog')">
+              <span>Todo queue</span>
+              <span class="measured">02</span>
+            </button>
+            <button type="button" class="nav-btn" id="menu-tickets-active" onclick="selectMenu('tickets', 'active')">
+              <span>In progress</span>
+              <span class="measured">02</span>
+            </button>
+          </div>
+
+          <div class="nav-group" role="group" aria-labelledby="nav-git-heading">
+            <div class="nav-group-head" id="nav-git-heading">
+              <span>Git and Pull Requests</span>
+              <span class="measured">03</span>
+            </div>
+            <button type="button" class="nav-btn" id="menu-git-review" onclick="selectMenu('git', 'review')">
+              <span>Git to review</span>
+              <span class="measured">02</span>
+            </button>
+            <button type="button" class="nav-btn" id="menu-git-merge" onclick="selectMenu('git', 'merge')">
+              <span>Git to merge</span>
+              <span class="measured">01</span>
+            </button>
+            <button type="button" class="nav-btn" id="menu-git-branches" onclick="selectMenu('git', 'branches')">
+              <span>Local branches</span>
+              <span class="measured">04</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="nav-group" role="group" aria-labelledby="nav-system-heading">
+          <div class="nav-group-head" id="nav-system-heading">
+            <span>System</span>
+            <span class="measured">v0.1</span>
+          </div>
+          <button type="button" class="nav-btn" id="menu-settings-providers" onclick="selectMenu('settings', 'providers')">
+            <span>Settings and providers</span>
+            <span class="measured">2 traits</span>
+          </button>
+        </div>
+      </aside>
+
+      <!-- STATE: LOADING -->
+      <main id="stage-loading" class="main-stage main-stage--single" hidden>
+        <section class="pane" aria-live="polite">
+          <div class="state-box">
+            <h2>Synchronising Plane.so and GitHub records</h2>
+            <p class="lead">Reading SQLite cache and polling active adapters over Rust async runtime.</p>
+            <div class="skeleton-line"></div>
+            <div class="skeleton-line"></div>
+            <div class="skeleton-line"></div>
+          </div>
+        </section>
+      </main>
+
+      <!-- STATE: EMPTY -->
+      <main id="stage-empty" class="main-stage main-stage--single" hidden>
+        <section class="pane" aria-live="polite">
+          <div class="state-box">
+            <h2>No assigned tickets or pull requests in this queue</h2>
+            <p class="lead">Your Plane workspace queue is clear, or you can pull the latest changes from your configured providers.</p>
+            <button type="button" class="btn btn--primary" onclick="setDataState('full')">Sync providers now</button>
+          </div>
+        </section>
+      </main>
+
+      <!-- STATE: ERROR -->
+      <main id="stage-error" class="main-stage main-stage--single" hidden>
+        <section class="pane" aria-live="polite">
+          <div class="state-box">
+            <h2>Plane.so adapter token expired</h2>
+            <p class="lead">The Rust provider-plane client received HTTP 401 from api.plane.so. Update your API key in provider settings or retry connection.</p>
+            <div class="action-group">
+              <button type="button" class="btn btn--primary" onclick="selectMenu('settings', 'providers'); setDataState('full')">Open provider settings</button>
+              <button type="button" class="btn" onclick="setDataState('full')">Retry sync</button>
+            </div>
+          </div>
+        </section>
+      </main>
+
+      <!-- VIEW 1: TICKETS (PLANE.SO) -->
+      <main id="stage-tickets" class="main-stage">
+        <section class="pane" aria-label="Plane ticket queue">
+          <div class="pane-header">
+            <h1>Tickets (Plane.so)</h1>
+            <button type="button" class="btn" onclick="selectTicket('pan149')">New ticket</button>
+          </div>
+
+          <div class="filter-bar">
+            <label for="ticket-search" class="visually-hidden">Filter Plane tickets</label>
+            <input id="ticket-search" name="ticket-search" type="search" autocomplete="off" inputmode="search" class="input-field" placeholder="Filter by key, title, or assignee">
+          </div>
+
+          <ul class="record-list" aria-label="Plane tickets">
+            <li class="record-item" id="row-pan142" data-selected="true">
+              <div class="record-top">
+                <button type="button" class="record-select-btn" onclick="selectTicket('pan142')">Inspect PAN-142</button>
+                <span class="chip chip--ok">PR #89 ready</span>
+              </div>
+              <div class="record-title">Fix JWT refresh race on concurrent requests</div>
+              <div class="record-meta">
+                <span class="person-tag">@ansar</span>
+                <span class="measured">In review</span>
+              </div>
+            </li>
+
+            <li class="record-item" id="row-pan145" data-selected="false">
+              <div class="record-top">
+                <button type="button" class="record-select-btn" onclick="selectTicket('pan145')">Inspect PAN-145</button>
+                <span class="chip chip--person">PR #92 review</span>
+              </div>
+              <div class="record-title">Add exponential backoff to webhook delivery</div>
+              <div class="record-meta">
+                <span class="person-tag">@alex</span>
+                <span class="measured">In progress</span>
+              </div>
+            </li>
+
+            <li class="record-item" id="row-pan149" data-selected="false">
+              <div class="record-top">
+                <button type="button" class="record-select-btn" onclick="selectTicket('pan149')">Inspect PAN-149</button>
+                <span class="chip">No branch</span>
+              </div>
+              <div class="record-title">Expose rate-limit headers on public endpoints</div>
+              <div class="record-meta">
+                <span class="person-tag">@ansar</span>
+                <span class="measured">Todo</span>
+              </div>
+            </li>
+          </ul>
+        </section>
+
+        <section class="pane pane--detail" aria-label="Selected Plane ticket inspector">
+          <div class="pane-header">
+            <div>
+              <span class="measured-ink" id="ticket-detail-id">PAN-142</span>
+              <h2 id="ticket-detail-title">Fix JWT refresh race on concurrent requests</h2>
+            </div>
+            <span class="chip chip--person" id="ticket-detail-owner">Assigned: @ansar</span>
+          </div>
+
+          <p id="ticket-detail-desc">When two requests expire within the same millisecond, parallel refresh calls invalidate the first rotated token. Guard rotation with an async mutex inside the session store.</p>
+
+          <div class="reading-row" aria-label="Ticket linked readings">
+            <div class="reading-cell">
+              <span class="reading-label">Plane state</span>
+              <span class="reading-value" id="ticket-reading-state">In review</span>
+            </div>
+            <div class="reading-cell">
+              <span class="reading-label">Linked pull request</span>
+              <span class="reading-value" id="ticket-reading-pr">#89</span>
+            </div>
+            <div class="reading-cell">
+              <span class="reading-label">CI verification</span>
+              <span class="reading-value" id="ticket-reading-ci">3 / 3 pass</span>
+            </div>
+          </div>
+
+          <div class="inspector-card">
+            <div class="inspector-section">
+              <h3>Ticket to Git audit trail</h3>
+              <div class="trail-list">
+                <div class="trail-row">
+                  <span class="measured">02:14:09</span>
+                  <span class="person-tag">@ansar</span>
+                  <span>Created ticket PAN-142 in Plane cycle 14</span>
+                </div>
+                <div class="trail-row">
+                  <span class="measured">02:18:44</span>
+                  <span class="person-tag">@ansar</span>
+                  <span>Branched <span class="measured-ink">fix/pan-142-jwt</span> from main</span>
+                </div>
+                <div class="trail-row">
+                  <span class="measured">02:41:12</span>
+                  <span class="person-tag">@sarah</span>
+                  <span>Approved GitHub pull request <span class="measured-ink">#89</span></span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="action-bar">
+            <div class="action-group">
+              <button type="button" class="btn btn--primary" onclick="selectMenu('git', 'merge')">Inspect PR #89 in Git view</button>
+              <button type="button" class="btn">Checkout fix/pan-142-jwt</button>
+              <button type="button" class="btn">Set Plane state Done</button>
+            </div>
+            <span class="measured">SQLite sync: 4s ago</span>
+          </div>
+        </section>
+      </main>
+
+      <!-- VIEW 2: GIT & PULL REQUESTS (GITHUB) -->
+      <main id="stage-git" class="main-stage" hidden>
+        <section class="pane" aria-label="GitHub pull request queue">
+          <div class="pane-header">
+            <h1>Git and Pull Requests</h1>
+            <span class="chip chip--instrument">repo: ansar/panguyuban</span>
+          </div>
+
+          <div class="filter-bar">
+            <label for="pr-search" class="visually-hidden">Filter pull requests</label>
+            <input id="pr-search" name="pr-search" type="search" autocomplete="off" inputmode="search" class="input-field" placeholder="Filter by PR number, branch, or author">
+          </div>
+
+          <ul class="record-list" aria-label="Pull requests">
+            <li class="record-item" id="row-pr89" data-selected="true">
+              <div class="record-top">
+                <button type="button" class="record-select-btn" onclick="selectPR('pr89')">Inspect PR #89</button>
+                <span class="chip chip--ok">Ready to merge</span>
+              </div>
+              <div class="record-title">fix(auth): serialize token refresh with mutex</div>
+              <div class="record-meta">
+                <span class="person-tag">@ansar</span>
+                <span class="measured">PAN-142</span>
+              </div>
+            </li>
+
+            <li class="record-item" id="row-pr92" data-selected="false">
+              <div class="record-top">
+                <button type="button" class="record-select-btn" onclick="selectPR('pr92')">Inspect PR #92</button>
+                <span class="chip chip--person">Needs review</span>
+              </div>
+              <div class="record-title">feat(webhook): bounded retry queue with jitter</div>
+              <div class="record-meta">
+                <span class="person-tag">@alex</span>
+                <span class="measured">PAN-145</span>
+              </div>
+            </li>
+
+            <li class="record-item" id="row-pr94" data-selected="false">
+              <div class="record-top">
+                <button type="button" class="record-select-btn" onclick="selectPR('pr94')">Inspect PR #94</button>
+                <span class="chip chip--person">Needs review</span>
+              </div>
+              <div class="record-title">chore(cargo): bump tokio and reqwest crates</div>
+              <div class="record-meta">
+                <span class="person-tag">@sarah</span>
+                <span class="measured">unlinked</span>
+              </div>
+            </li>
+          </ul>
+        </section>
+
+        <section class="pane pane--detail" aria-label="Selected pull request inspector">
+          <div class="pane-header">
+            <div>
+              <span class="measured-ink" id="pr-detail-id">PR #89 (fix/pan-142-jwt to main)</span>
+              <h2 id="pr-detail-title">fix(auth): serialize token refresh with mutex</h2>
+            </div>
+            <span class="chip chip--ok" id="pr-detail-status">Mergeable</span>
+          </div>
+
+          <div class="reading-row" aria-label="Pull request telemetry">
+            <div class="reading-cell">
+              <span class="reading-label">Diff delta</span>
+              <span class="reading-value" id="pr-reading-delta">+84 / -19</span>
+            </div>
+            <div class="reading-cell">
+              <span class="reading-label">Reviews</span>
+              <span class="reading-value" id="pr-reading-reviews">2 approved</span>
+            </div>
+            <div class="reading-cell">
+              <span class="reading-label">Linked ticket</span>
+              <span class="reading-value" id="pr-reading-ticket">PAN-142</span>
+            </div>
+          </div>
+
+          <div class="inspector-card">
+            <div class="inspector-section">
+              <h3>Summary diff preview (crates/panguyuban-core/src/auth.rs)</h3>
+              <div class="diff-panel" aria-label="Code diff excerpt">
+                <div class="diff-line">@@ -42,7 +42,9 @@ impl TokenManager {</div>
+                <div class="diff-line diff-line--minus">-    let next = self.client.refresh(&amp;current).await?;</div>
+                <div class="diff-line diff-line--plus">+    let _guard = self.refresh_lock.lock().await;</div>
+                <div class="diff-line diff-line--plus">+    let next = self.client.refresh(&amp;current).await?;</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="action-bar">
+            <div class="action-group">
+              <button type="button" class="btn btn--primary" id="pr-merge-btn" onclick="mergeSelectedPR()">Squash and merge PR #89 + close PAN-142</button>
+              <button type="button" class="btn">Approve PR</button>
+              <button type="button" class="btn">Checkout branch</button>
+            </div>
+            <span class="measured" id="pr-action-feedback" role="status">Ready on GitHub</span>
+          </div>
+        </section>
+      </main>
+
+      <!-- VIEW 3: MODULAR PROVIDER SETTINGS -->
+      <main id="stage-settings" class="main-stage main-stage--single" hidden>
+        <section class="pane" aria-label="Provider adapter settings">
+          <div class="pane-header">
+            <div>
+              <h1>Modular provider adapters</h1>
+              <p class="lead">Panguyuban separates Rust traits in panguyuban-core from platform adapters so you can swap Plane.so or GitHub without touching the UI.</p>
+            </div>
+          </div>
+
+          <div class="settings-grid">
+            <div class="inspector-card">
+              <div class="inspector-section">
+                <div class="record-top">
+                  <h2>IssueProvider trait</h2>
+                  <span class="chip chip--ok">Active: provider-plane</span>
+                </div>
+                <p>Connects ticket queues, state transitions, and cycle metadata to the Tauri frontend.</p>
+
+                <div class="field-group">
+                  <label class="field-label" for="issue-adapter">Adapter crate</label>
+                  <input id="issue-adapter" name="issue-adapter" type="text" autocomplete="off" class="input-field" value="provider-plane (Plane.so REST v1)" readonly>
+                  <span class="field-help">Available trait implementations: provider-plane, provider-linear, provider-jira.</span>
+                </div>
+
+                <div class="field-group">
+                  <label class="field-label" for="plane-slug">Plane workspace slug</label>
+                  <input id="plane-slug" name="plane-slug" type="text" autocomplete="organization" class="input-field" value="panguyuban">
+                  <span class="field-help">Stored in local SQLite configuration; API token sits in OS keychain.</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="inspector-card">
+              <div class="inspector-section">
+                <div class="record-top">
+                  <h2>GitProvider trait</h2>
+                  <span class="chip chip--ok">Active: provider-github</span>
+                </div>
+                <p>Manages pull request review queues, CI status checks, local git2 branches, and squash merges.</p>
+
+                <div class="field-group">
+                  <label class="field-label" for="git-adapter">Adapter crate</label>
+                  <input id="git-adapter" name="git-adapter" type="text" autocomplete="off" class="input-field" value="provider-github (GitHub REST + local git2)" readonly>
+                  <span class="field-help">Available trait implementations: provider-github, provider-gitlab, provider-gitea.</span>
+                </div>
+
+                <div class="field-group">
+                  <label class="field-label" for="github-repo">Target repository</label>
+                  <input id="github-repo" name="github-repo" type="text" autocomplete="off" class="input-field" value="ansar/panguyuban">
+                  <span class="field-help">Matched against ticket IDs via branch pattern feat/pan-* and fix/pan-*.</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <script>
+    let currentSection = 'tickets';
+
+    function selectMenu(section, subkey) {
+      currentSection = section;
+      document.querySelectorAll('.nav-btn').forEach((btn) => {
+        btn.removeAttribute('aria-current');
+      });
+      const activeBtn = document.getElementById('menu-' + section + '-' + subkey);
+      if (activeBtn) {
+        activeBtn.setAttribute('aria-current', 'page');
+      }
+      setDataState('full');
+    }
+
+    function setDataState(state) {
+      const stages = ['tickets', 'git', 'settings', 'loading', 'empty', 'error'];
+      stages.forEach((id) => {
+        const el = document.getElementById('stage-' + id);
+        if (el) el.hidden = true;
+      });
+
+      if (state === 'full') {
+        const target = document.getElementById('stage-' + currentSection);
+        if (target) target.hidden = false;
+      } else {
+        const target = document.getElementById('stage-' + state);
+        if (target) target.hidden = false;
+      }
+    }
+
+    const tickets = {
+      pan142: {
+        id: 'PAN-142',
+        title: 'Fix JWT refresh race on concurrent requests',
+        owner: 'Assigned: @ansar',
+        desc: 'When two requests expire within the same millisecond, parallel refresh calls invalidate the first rotated token. Guard rotation with an async mutex inside the session store.',
+        state: 'In review',
+        pr: '#89',
+        ci: '3 / 3 pass'
+      },
+      pan145: {
+        id: 'PAN-145',
+        title: 'Add exponential backoff to webhook delivery',
+        owner: 'Assigned: @alex',
+        desc: 'Failed webhook deliveries currently retry immediately and trip downstream rate limits. Schedule retries with jitter over 5 attempts.',
+        state: 'In progress',
+        pr: '#92',
+        ci: '2 / 3 pass'
+      },
+      pan149: {
+        id: 'PAN-149',
+        title: 'Expose rate-limit headers on public endpoints',
+        owner: 'Assigned: @ansar',
+        desc: 'Return X-RateLimit-Limit, X-RateLimit-Remaining, and X-RateLimit-Reset on all authenticated API routes.',
+        state: 'Todo',
+        pr: 'None',
+        ci: 'Not started'
+      }
+    };
+
+    function selectTicket(key) {
+      ['pan142', 'pan145', 'pan149'].forEach((k) => {
+        const row = document.getElementById('row-' + k);
+        if (row) row.setAttribute('data-selected', k === key ? 'true' : 'false');
+      });
+      const item = tickets[key];
+      if (!item) return;
+      document.getElementById('ticket-detail-id').textContent = item.id;
+      document.getElementById('ticket-detail-title').textContent = item.title;
+      document.getElementById('ticket-detail-owner').textContent = item.owner;
+      document.getElementById('ticket-detail-desc').textContent = item.desc;
+      document.getElementById('ticket-reading-state').textContent = item.state;
+      document.getElementById('ticket-reading-pr').textContent = item.pr;
+      document.getElementById('ticket-reading-ci').textContent = item.ci;
+    }
+
+    const prs = {
+      pr89: {
+        id: 'PR #89 (fix/pan-142-jwt to main)',
+        title: 'fix(auth): serialize token refresh with mutex',
+        status: 'Mergeable',
+        delta: '+84 / -19',
+        reviews: '2 approved',
+        ticket: 'PAN-142',
+        btn: 'Squash and merge PR #89 + close PAN-142'
+      },
+      pr92: {
+        id: 'PR #92 (feat/pan-145-webhook to main)',
+        title: 'feat(webhook): bounded retry queue with jitter',
+        status: 'Needs review',
+        delta: '+142 / -11',
+        reviews: '0 approved',
+        ticket: 'PAN-145',
+        btn: 'Approve PR #92'
+      },
+      pr94: {
+        id: 'PR #94 (chore/tokio-bump to main)',
+        title: 'chore(cargo): bump tokio and reqwest crates',
+        status: 'Needs review',
+        delta: '+18 / -18',
+        reviews: '1 approved',
+        ticket: 'Unlinked',
+        btn: 'Approve PR #94'
+      }
+    };
+
+    function selectPR(key) {
+      ['pr89', 'pr92', 'pr94'].forEach((k) => {
+        const row = document.getElementById('row-' + k);
+        if (row) row.setAttribute('data-selected', k === key ? 'true' : 'false');
+      });
+      const item = prs[key];
+      if (!item) return;
+      document.getElementById('pr-detail-id').textContent = item.id;
+      document.getElementById('pr-detail-title').textContent = item.title;
+      document.getElementById('pr-detail-status').textContent = item.status;
+      document.getElementById('pr-reading-delta').textContent = item.delta;
+      document.getElementById('pr-reading-reviews').textContent = item.reviews;
+      document.getElementById('pr-reading-ticket').textContent = item.ticket;
+      document.getElementById('pr-merge-btn').textContent = item.btn;
+      document.getElementById('pr-action-feedback').textContent = 'Ready on GitHub';
+    }
+
+    function mergeSelectedPR() {
+      const feedback = document.getElementById('pr-action-feedback');
+      feedback.textContent = 'Dry run: wire Tauri command merge_pull_request to execute on GitHub and Plane.so';
+    }
+  </script>
+</body>
+</html>

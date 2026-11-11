@@ -1,0 +1,24 @@
+[
+ {
+  "scope": "app",
+  "shape": "app screen",
+  "theme": "console",
+  "axes": "dark/grotesk-sans/chromatic-amber",
+  "nav": "sidebar with Tickets and Git sections",
+  "footer": "none",
+  "imagery": "none",
+  "photos": [],
+  "entry": "direct",
+  "fingerprint": "app-screen-3pane-console",
+  "sections": [
+   "tickets",
+   "git",
+   "settings"
+  ],
+  "signature": "unified ticket-to-PR audit ledger",
+  "waived": [],
+  "prompt": "Panguyuban desktop workflow app in Tauri + Rust",
+  "date": "2026-11-10",
+  "mode": "build"
+ }
+]
