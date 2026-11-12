@@ -3,3 +3,6 @@ node_modules/
 dist/
 .superpowers/
 .DS_Store
+
+# Files Claude sent during sessions (screenshots, samples)
+Claude outputs/

@@ -4,6 +4,7 @@ members = [
     "crates/panguyuban-core",
     "crates/provider-plane",
     "crates/provider-github",
+    "crates/agent-runtime",
     "apps/panguyuban-desktop/src-tauri",
 ]
 

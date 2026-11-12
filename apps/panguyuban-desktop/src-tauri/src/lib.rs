@@ -1,4 +1,5 @@
 mod agents;
+mod builder;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -680,6 +681,46 @@ async fn open_agent_folder(cwd: String) -> Result<(), String> {
         .map_err(|e| e.to_string())?
 }
 
+/// Which agent command-line tools the guided builder can use on this machine.
+#[tauri::command]
+async fn builder_agents() -> Result<Vec<builder::HarnessStatus>, String> {
+    tokio::task::spawn_blocking(builder::harness_statuses)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// One PRD interview turn. The agent process runs off the async runtime's worker threads.
+#[tauri::command]
+async fn builder_interview_turn(
+    args: builder::InterviewTurnArgs,
+) -> Result<builder::InterviewTurnResult, String> {
+    tokio::task::spawn_blocking(move || builder::run_interview_turn(args))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Sizes the steps of an approved PRD and flags the ones an engineer must clear.
+#[tauri::command]
+async fn builder_plan(args: builder::PlanArgs) -> Result<agent_runtime::Plan, String> {
+    tokio::task::spawn_blocking(move || builder::run_plan(args))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Proposes or revises the HTML mock-up for an approved PRD.
+#[tauri::command]
+async fn builder_design(args: builder::DesignArgs) -> Result<builder::DesignResult, String> {
+    tokio::task::spawn_blocking(move || builder::run_design(args))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Overwrites a prototype's prd.md, used when the user approves the PRD.
+#[tauri::command]
+fn builder_save_prd(args: builder::SavePrdArgs) -> Result<String, String> {
+    builder::save_prd(args)
+}
+
 #[tauri::command]
 fn save_workspace_config(
     state: tauri::State<'_, DesktopController>,
@@ -716,6 +757,11 @@ pub fn run() {
             agent_usage,
             reveal_agent,
             open_agent_folder,
+            builder_agents,
+            builder_interview_turn,
+            builder_plan,
+            builder_design,
+            builder_save_prd,
             save_workspace_config
         ])
         .run(tauri::generate_context!())

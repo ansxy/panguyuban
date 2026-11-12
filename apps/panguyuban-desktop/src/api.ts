@@ -451,3 +451,103 @@ export async function openAgentFolder(cwd: string): Promise<void> {
     return window.__TAURI_INTERNALS__.invoke<void>("open_agent_folder", { cwd });
   }
 }
+
+// ---------- Guided builder (real agent for the PRD interview) ----------
+
+export interface HarnessStatus {
+  harness: "claude" | "antigravity";
+  available: boolean;
+}
+
+export interface InterviewTurnArgs {
+  projectId: string;
+  projectName: string;
+  client: string;
+  author: string;
+  harness: string;
+  model: string | null;
+  transcript: { from: "agent" | "user"; text: string }[];
+}
+
+export interface InterviewTurnResult {
+  message: string;
+  prd: string | null;
+  prd_path: string | null;
+}
+
+/** Which agent command-line tools are installed. Empty outside the desktop app. */
+export async function builderAgents(): Promise<HarnessStatus[]> {
+  if (window.__TAURI_INTERNALS__?.invoke) {
+    return window.__TAURI_INTERNALS__.invoke<HarnessStatus[]>("builder_agents");
+  }
+  return [];
+}
+
+export async function builderInterviewTurn(args: InterviewTurnArgs): Promise<InterviewTurnResult> {
+  if (window.__TAURI_INTERNALS__?.invoke) {
+    return window.__TAURI_INTERNALS__.invoke<InterviewTurnResult>("builder_interview_turn", { args });
+  }
+  throw new Error("A real agent needs the desktop app");
+}
+
+/** Overwrites prd.md for a prototype (used when the user approves it). */
+export async function builderSavePrd(args: {
+  projectId: string;
+  projectName: string;
+  content: string;
+  /** Which document in the prototype's folder to write. Defaults to prd.md. */
+  file?: "prd.md" | "handover.md";
+}): Promise<string> {
+  if (window.__TAURI_INTERNALS__?.invoke) {
+    return window.__TAURI_INTERNALS__.invoke<string>("builder_save_prd", { args });
+  }
+  throw new Error("Saving needs the desktop app");
+}
+
+export interface StepPlan {
+  id: string;
+  size: "small" | "hard";
+  needs_engineer: boolean;
+  reason: string;
+}
+
+export interface BuildPlan {
+  summary: string;
+  steps: StepPlan[];
+}
+
+/** Has the agent size each step of the approved PRD and flag the ones an engineer must clear. */
+export async function builderPlan(args: {
+  projectId: string;
+  projectName: string;
+  harness: string;
+  model: string | null;
+  prd: string;
+}): Promise<BuildPlan> {
+  if (window.__TAURI_INTERNALS__?.invoke) {
+    return window.__TAURI_INTERNALS__.invoke<BuildPlan>("builder_plan", { args });
+  }
+  throw new Error("A real agent needs the desktop app");
+}
+
+export interface DesignResult {
+  message: string;
+  html: string;
+  path: string | null;
+}
+
+/** Has the agent propose the HTML mock-up for an approved PRD, or revise the current one. */
+export async function builderDesign(args: {
+  projectId: string;
+  projectName: string;
+  harness: string;
+  model: string | null;
+  prd: string;
+  current: string | null;
+  changes: string[];
+}): Promise<DesignResult> {
+  if (window.__TAURI_INTERNALS__?.invoke) {
+    return window.__TAURI_INTERNALS__.invoke<DesignResult>("builder_design", { args });
+  }
+  throw new Error("A real agent needs the desktop app");
+}

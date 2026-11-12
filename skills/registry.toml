@@ -1,0 +1,120 @@
+# Panguyuban skill library registry.
+# Maps what the user picks (a session type) to the skills that session may use.
+# Engineering owns this file. Users never see skill names.
+#
+# The user only picks product-level things. They never choose between backend,
+# frontend or database work: the agent loads the engineering skills a story needs.
+#
+# skill              : the product skill that drives the conversation (skills/product/).
+# engineering_skills : which skills from skills/engineering/ the agent may load.
+#                      [] = none, ["*"] = any skill in that folder. Skills from
+#                      anywhere else on the machine are never loaded.
+# phase              : "discover" = before prd.md is approved, "build" = after,
+#                      "handover" = closing the project.
+# write_paths        : the only paths the agent may write. "*" = the whole project.
+# shell              : whether the agent may run commands.
+# status             : "ready" = the product skill exists in this library, "pending" = not yet.
+
+library_version = "0.4.0"
+
+[[session_type]]
+id                 = "start-new-app"
+label_en           = "Start a new app"
+label_id           = "Mulai aplikasi baru"
+skill              = "prd-interview"
+engineering_skills = []
+phase              = "discover"
+write_paths        = ["prd.md"]
+shell              = false
+status             = "ready"
+
+[[session_type]]
+id                 = "build-next-story"
+label_en           = "Build the next step"
+label_id           = "Kerjakan langkah berikutnya"
+skill              = "build-story"
+engineering_skills = ["*"]
+phase              = "build"
+write_paths        = ["*"]
+shell              = true
+status             = "pending"
+
+[[session_type]]
+id                 = "change-request"
+label_en           = "Change something"
+label_id           = "Ubah sesuatu"
+skill              = "change-request"
+engineering_skills = ["*"]
+phase              = "build"
+write_paths        = ["*"]
+shell              = true
+status             = "pending"
+
+[[session_type]]
+id                 = "hand-over"
+label_en           = "Hand over to engineering"
+label_id           = "Serahkan ke engineering"
+skill              = "handover-writer"
+engineering_skills = []
+phase              = "handover"
+write_paths        = ["handover.md"]
+shell              = false
+status             = "pending"
+
+# ---------- Agents ----------
+# One agent is the orchestrator: it plans, splits a story into tasks, hands each
+# task to an agent, and reviews the result. The app (not the orchestrator) starts
+# each agent, waits for it to finish, and runs the standards checks.
+#
+# Assignment has two modes, chosen per prototype in the Steps tab:
+#   autopilot : [[route]] below decides. Hard steps go to the lead, small ones to a worker.
+#   manual    : a person picks the agent per step; steps left on "Auto" follow [[route]].
+#
+# The desktop app mirrors this list in apps/panguyuban-desktop/src/builder_flow.ts
+# until the registry is loaded at runtime. Keep the two in step.
+
+[orchestrator]
+agent          = "claude-lead"
+max_attempts   = 2      # worker failures on the checks before the task returns to the lead
+parallel       = false  # one worker at a time
+
+[[agent]]
+id      = "claude-lead"
+label   = "Claude lead"
+harness = "claude"
+model   = "claude-opus-5-5"     # set to the capable model you use
+tier    = "lead"
+
+[[agent]]
+id      = "claude-worker"
+label   = "Claude worker"
+harness = "claude"
+model   = "claude-sonnet-5-5"   # set to the cheaper model you use
+tier    = "worker"
+
+[[agent]]
+id              = "antigravity-worker"
+label           = "Antigravity worker"
+harness         = "antigravity"
+tier            = "worker"
+timeout_minutes = 10
+
+[[route]]
+size = "hard"
+tier = "lead"
+
+[[route]]
+size = "small"
+tier = "worker"   # the first agent listed with this tier
+
+# prd-to-stories runs by itself right after the PRD is approved (no session type): it sizes
+# each step and flags the ones an engineer must clear.
+# html-prototype runs as soon as the PRD is approved: one working HTML file on made-up data,
+# which the user checks line by line, shows to the client, and hands to engineering as the
+# reference for the real app. It can be replaced by the Hallmark skill (PRD in, HTML out).
+#
+# The flow is one way: interview -> prototype -> show -> hand over. Anyone may instead (or
+# afterwards) choose "Build it here", which adds plan -> set up -> build before the handover;
+# prd-to-stories and the engineering skills are used only on that path.
+# Product skills still to write: build-story, change-request, handover-writer.
+# Engineering skills still to copy in: see skills/engineering/README.md.

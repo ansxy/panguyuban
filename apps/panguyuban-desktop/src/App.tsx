@@ -18,8 +18,9 @@ import {
 } from "./api";
 import { FilterTabs, padCount } from "./ui";
 import { AgentsView, useAgents } from "./Agents";
+import { BuilderView, useBuilder } from "./Builder";
 
-type SectionKey = "tickets" | "git" | "agents" | "settings";
+type SectionKey = "tickets" | "git" | "agents" | "builder" | "settings";
 type DataState = "full" | "loading" | "empty" | "error";
 
 function formatCiState(pr: PullRequest): string {
@@ -61,6 +62,7 @@ export function App(): React.JSX.Element {
   const [diffs, setDiffs] = useState<Record<string, string[]>>({});
   const [layout, setLayout] = useLayout();
   const agents = useAgents(section === "agents");
+  const builder = useBuilder();
   const [refreshing, setRefreshing] = useState<"plane" | "git" | null>(null);
   const [planeProjects, setPlaneProjects] = useState<PlaneProject[]>([]);
   const [githubRepo, setGithubRepo] = useState<string>("");
@@ -375,6 +377,15 @@ export function App(): React.JSX.Element {
               refreshDisabled={agents.refreshing}
               onSelect={() => handleMenuSelect("agents")}
               onRefresh={agents.refresh}
+            />
+            <NavItem
+              glyph="▣"
+              label="Prototypes"
+              hint="Guided builder"
+              count={builder.projects.length}
+              current={section === "builder"}
+              collapsed={layout.sidebarCollapsed}
+              onSelect={() => handleMenuSelect("builder")}
             />
           </nav>
 
@@ -861,6 +872,14 @@ export function App(): React.JSX.Element {
               }
               focusButton={<FocusButton layout={layout} setLayout={setLayout} />}
             />
+          </main>
+        )}
+
+        {dataState === "full" && section === "builder" && (
+          <main
+            className={builder.project ? "main-stage main-stage--builder" : "main-stage main-stage--single"}
+          >
+            <BuilderView builder={builder} />
           </main>
         )}
 
