@@ -1,5 +1,7 @@
 mod agents;
 mod builder;
+mod spaces;
+mod terminal;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -722,6 +724,81 @@ fn builder_save_prd(args: builder::SavePrdArgs) -> Result<String, String> {
 }
 
 #[tauri::command]
+fn term_open(
+    terms: tauri::State<'_, terminal::Terminals>,
+    cols: u16,
+    rows: u16,
+    cwd: String,
+) -> Result<u32, String> {
+    terms.open(cols, rows, &cwd)
+}
+
+/// Next chunk of shell output as raw bytes; an empty buffer means the shell exited.
+#[tauri::command]
+async fn term_read(
+    terms: tauri::State<'_, terminal::Terminals>,
+    id: u32,
+) -> Result<tauri::ipc::Response, String> {
+    let out = terms.read(id).await?.unwrap_or_default();
+    Ok(tauri::ipc::Response::new(out))
+}
+
+#[tauri::command]
+fn term_write(terms: tauri::State<'_, terminal::Terminals>, id: u32, data: String) -> Result<(), String> {
+    terms.write(id, &data)
+}
+
+#[tauri::command]
+fn term_resize(
+    terms: tauri::State<'_, terminal::Terminals>,
+    id: u32,
+    cols: u16,
+    rows: u16,
+) -> Result<(), String> {
+    terms.resize(id, cols, rows)
+}
+
+#[tauri::command]
+fn term_info(terms: tauri::State<'_, terminal::Terminals>, id: u32) -> Result<terminal::TermInfo, String> {
+    terms.info(id)
+}
+
+/// Branch, ahead/behind and GitHub repo of each space's folder.
+#[tauri::command]
+async fn space_status(paths: Vec<String>) -> Result<Vec<spaces::SpaceStatus>, String> {
+    tokio::task::spawn_blocking(move || paths.iter().map(|p| spaces::status(p)).collect())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn folder_list(path: String) -> Result<Vec<spaces::DirEntry>, String> {
+    tokio::task::spawn_blocking(move || spaces::list_dir(&path))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn folder_read_file(path: String) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || spaces::read_file(&path))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Uncommitted changes in a folder's git repo, as unified diff lines.
+#[tauri::command]
+async fn folder_changes(path: String) -> Result<Vec<String>, String> {
+    tokio::task::spawn_blocking(move || spaces::changes(&path))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+fn term_close(terms: tauri::State<'_, terminal::Terminals>, id: u32) {
+    terms.close(id)
+}
+
+#[tauri::command]
 fn save_workspace_config(
     state: tauri::State<'_, DesktopController>,
     config: WorkspaceConfig,
@@ -741,6 +818,7 @@ pub fn run() {
     tauri::Builder::default()
         .manage(controller)
         .manage(Tracker::default())
+        .manage(terminal::Terminals::default())
         .invoke_handler(tauri::generate_handler![
             get_dashboard_state,
             sync_providers,
@@ -762,6 +840,16 @@ pub fn run() {
             builder_plan,
             builder_design,
             builder_save_prd,
+            term_open,
+            term_read,
+            term_write,
+            term_resize,
+            term_close,
+            term_info,
+            space_status,
+            folder_list,
+            folder_read_file,
+            folder_changes,
             save_workspace_config
         ])
         .run(tauri::generate_context!())

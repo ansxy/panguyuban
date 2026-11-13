@@ -8,7 +8,7 @@
 /* The app is exactly one window tall; each column scrolls on its own. */
 .app-shell {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   height: 100dvh;
   overflow: hidden;
   background: var(--color-paper);
@@ -827,6 +827,7 @@ html[data-resizing] .workspace-grid {
 }
 
 .app-shell[data-sidebar-collapsed] .sidebar-title,
+.app-shell[data-sidebar-collapsed] .sidebar-head .wordmark,
 .app-shell[data-sidebar-collapsed] .nav-text,
 .app-shell[data-sidebar-collapsed] .nav-count,
 .app-shell[data-sidebar-collapsed] .nav-item .refresh-btn {
@@ -1586,4 +1587,320 @@ html[data-resizing] .workspace-grid {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
   }
+}
+
+/* ---- Spaces, tab bar, terminal panes, status bar ---- */
+
+.sidebar-head .wordmark {
+  font-size: var(--text-sm);
+}
+
+/* Views sit between Spaces and Agents at their natural height; those two share the rest. */
+.sidebar > .nav-card.nav-card--views {
+  flex: none;
+}
+
+.nav-group-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 var(--space-2xs) var(--space-2xs) var(--space-sm);
+}
+
+.space-badge {
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: oklch(18% 0.03 var(--badge-hue));
+  background: oklch(72% 0.13 var(--badge-hue));
+}
+
+.nav-item[data-current] .space-badge {
+  color: oklch(18% 0.03 var(--badge-hue));
+}
+
+.space-branch {
+  max-width: 45%;
+  font-family: var(--font-outlier);
+}
+
+.space-remove {
+  visibility: hidden;
+}
+
+.space-item:hover .space-remove,
+.space-remove:focus-visible {
+  visibility: visible;
+}
+
+.app-shell[data-sidebar-collapsed] .space-branch,
+.app-shell[data-sidebar-collapsed] .nav-group-head .refresh-btn {
+  display: none;
+}
+
+.stage {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.stage > main {
+  flex: 1 1 0;
+  min-height: 0;
+}
+
+.tabbar,
+.statusbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2xs);
+  background: var(--color-paper-3);
+  white-space: nowrap;
+  overflow-x: auto;
+}
+
+.tabbar {
+  padding: var(--space-xs) var(--space-sm);
+  border-bottom: var(--rule-hair) solid var(--color-rule);
+  font-size: 0.8125rem;
+}
+
+.tabbar-spacer {
+  flex: 1;
+}
+
+.tab {
+  display: flex;
+  align-items: center;
+  border: var(--rule-hair) solid transparent;
+  border-radius: var(--radius-pill);
+  transition: background-color var(--dur-micro) var(--ease-out);
+}
+
+.tab:hover {
+  background: var(--color-paper-2);
+}
+
+.tab[data-current] {
+  background: var(--color-paper-2);
+  border-color: var(--color-rule-2);
+}
+
+.tab-main,
+.tab-close,
+.tab-add {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px var(--space-xs);
+  border: 0;
+  background: none;
+  color: var(--color-ink-2);
+  cursor: pointer;
+}
+
+.tab[data-current] .tab-main {
+  color: var(--color-ink);
+}
+
+.tab[data-current] .tab-main > span {
+  color: var(--color-accent);
+}
+
+.tab-close {
+  padding-left: 0;
+  color: var(--color-muted);
+}
+
+.tab-close:hover,
+.tab-add:hover {
+  color: var(--color-ink);
+}
+
+.tab-main:focus-visible,
+.tab-close:focus-visible,
+.tab-add:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 1px;
+  border-radius: var(--radius-pill);
+}
+
+.statusbar {
+  gap: var(--space-md);
+  padding: 4px var(--space-md);
+  border-top: var(--rule-hair) solid var(--color-rule);
+  font-size: var(--text-xs);
+  color: var(--color-muted);
+}
+
+.statusbar [data-attention] {
+  color: var(--color-accent);
+}
+
+/* Panes are placed by percent (see layoutPanes); the slot padding is the gutter. */
+.term-stage {
+  display: block;
+  background: var(--color-paper-3);
+}
+
+.term-slot {
+  position: absolute;
+  padding: 4px;
+}
+
+.term-pane {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  border: var(--rule-hair) solid var(--color-rule);
+  border-radius: var(--radius-card);
+  background: #15181c; /* matches the xterm theme in Terminal.tsx */
+}
+
+.term-pane[data-focused] {
+  border-color: var(--color-rule-2);
+}
+
+.term-pane-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  padding: 4px var(--space-xs) 4px var(--space-sm);
+  border-bottom: var(--rule-hair) solid var(--color-rule);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+
+.term-pane-glyph {
+  color: var(--color-muted);
+}
+
+.term-pane[data-focused] .term-pane-glyph {
+  color: var(--color-accent);
+}
+
+.term-pane-cmd {
+  font-weight: 500;
+  color: var(--color-ink);
+}
+
+.term-pane-cwd {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--color-muted);
+}
+
+.term-pane-tools {
+  display: flex;
+  gap: 2px;
+}
+
+.terminal-host {
+  flex: 1;
+  min-height: 0;
+  padding: var(--space-xs) 0 0 var(--space-xs);
+}
+
+/* ---- Files / Changes side panel ---- */
+
+.term-area {
+  display: flex;
+  flex: 1 1 0;
+  min-height: 0;
+}
+
+.term-area > main {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.tab-toggle[aria-pressed="true"] {
+  color: var(--color-ink);
+  background: var(--color-paper-2);
+  border-radius: var(--radius-pill);
+}
+
+.folder-panel {
+  display: flex;
+  flex-direction: column;
+  width: min(520px, 42%);
+  min-width: 260px;
+  border-left: var(--rule-hair) solid var(--color-rule);
+  background: var(--color-paper);
+}
+
+.folder-panel-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  padding: 6px var(--space-xs) 6px var(--space-sm);
+  border-bottom: var(--rule-hair) solid var(--color-rule);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+
+.folder-panel-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--space-xs);
+}
+
+.tree-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  padding: 2px var(--space-xs);
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: none;
+  color: var(--color-ink-2);
+  font-family: var(--font-outlier);
+  font-size: var(--text-xs);
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.tree-row:hover {
+  background: var(--color-paper-2);
+  color: var(--color-ink);
+}
+
+.tree-row[data-dir] {
+  color: var(--color-ink);
+}
+
+.tree-glyph {
+  width: 12px;
+  flex-shrink: 0;
+  color: var(--color-muted);
+}
+
+.tree-note {
+  padding: 4px var(--space-xs);
+  font-size: var(--text-xs);
+  color: var(--color-muted);
+}
+
+.file-preview-back {
+  position: sticky;
+  top: calc(-1 * var(--space-xs));
+  background: var(--color-paper);
+}
+
+.file-preview-text {
+  margin: var(--space-xs) 0 0;
+  font-family: var(--font-outlier);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  color: var(--color-ink-2);
+  white-space: pre;
 }

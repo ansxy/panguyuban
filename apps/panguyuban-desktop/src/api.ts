@@ -551,3 +551,78 @@ export async function builderDesign(args: {
   }
   throw new Error("A real agent needs the desktop app");
 }
+
+/** Starts the user's login shell on a PTY and returns its id. */
+export async function termOpen(cols: number, rows: number, cwd: string): Promise<number> {
+  if (window.__TAURI_INTERNALS__?.invoke) {
+    return window.__TAURI_INTERNALS__.invoke<number>("term_open", { cols, rows, cwd });
+  }
+  throw new Error("The terminal needs the desktop app");
+}
+
+// The rest only run after termOpen succeeded, so Tauri is there.
+
+/** Waits for the next shell output; an empty buffer means the shell exited. */
+export function termRead(id: number): Promise<ArrayBuffer> {
+  return window.__TAURI_INTERNALS__!.invoke<ArrayBuffer>("term_read", { id });
+}
+
+export function termWrite(id: number, data: string): Promise<void> {
+  return window.__TAURI_INTERNALS__!.invoke<void>("term_write", { id, data });
+}
+
+export function termResize(id: number, cols: number, rows: number): Promise<void> {
+  return window.__TAURI_INTERNALS__!.invoke<void>("term_resize", { id, cols, rows });
+}
+
+export function termClose(id: number): Promise<void> {
+  return window.__TAURI_INTERNALS__!.invoke<void>("term_close", { id });
+}
+
+export interface TermInfo {
+  command: string;
+  cwd: string;
+}
+
+/** The pane's foreground program and folder, for its header. */
+export function termInfo(id: number): Promise<TermInfo> {
+  return window.__TAURI_INTERNALS__!.invoke<TermInfo>("term_info", { id });
+}
+
+export interface SpaceStatus {
+  path: string;
+  branch: string | null;
+  ahead: number;
+  behind: number;
+  github_repo: string | null;
+}
+
+/** Git state of each folder (`~` allowed). Empty outside the desktop app. */
+export async function spaceStatus(paths: string[]): Promise<SpaceStatus[]> {
+  if (window.__TAURI_INTERNALS__?.invoke) {
+    return window.__TAURI_INTERNALS__.invoke<SpaceStatus[]>("space_status", { paths });
+  }
+  return [];
+}
+
+export interface DirEntry {
+  name: string;
+  is_dir: boolean;
+}
+
+// Folder panel calls only run in the desktop app (the panel sits beside a terminal).
+
+/** One folder level, folders first (`~` allowed). */
+export function folderList(path: string): Promise<DirEntry[]> {
+  return window.__TAURI_INTERNALS__!.invoke<DirEntry[]>("folder_list", { path });
+}
+
+/** A text file's contents; rejects for binary or very large files. */
+export function folderReadFile(path: string): Promise<string> {
+  return window.__TAURI_INTERNALS__!.invoke<string>("folder_read_file", { path });
+}
+
+/** Uncommitted changes (edits since HEAD plus new files) as unified diff lines. */
+export function folderChanges(path: string): Promise<string[]> {
+  return window.__TAURI_INTERNALS__!.invoke<string[]>("folder_changes", { path });
+}
