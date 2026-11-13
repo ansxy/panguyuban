@@ -111,6 +111,16 @@ export function useSpaces() {
     updateSpace(active.id, (s) => ({ ...s, tabs: [...s.tabs, tab], activeTab: tab.id }));
   }
 
+  /** Shows the space already in `cwd`, or opens a new one there. */
+  function openAt(cwd: string): void {
+    const existing = list.find((s) => cwdOf(s) === cwd);
+    if (existing) return setActiveId(existing.id);
+    const tab = newTab(cwd);
+    const space = { id: newId(), tabs: [tab], activeTab: tab.id };
+    setList((all) => [...all, space]);
+    setActiveId(space.id);
+  }
+
   function split(spaceId: string, tabId: string, paneId: string, dir: "row" | "col"): void {
     const pane = newId();
     const cwd = paneCwd[paneId] ?? HOME;
@@ -139,6 +149,7 @@ export function useSpaces() {
     select: setActiveId,
     remove: (id: string) => setList((all) => all.filter((s) => s.id !== id)),
     openTab,
+    openAt,
     selectTab: (tabId: string) => active && updateSpace(active.id, (s) => ({ ...s, activeTab: tabId })),
     closeTab: (tabId: string) => active && updateTab(active.id, tabId, () => null),
     split,

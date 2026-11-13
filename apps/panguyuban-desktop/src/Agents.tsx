@@ -513,7 +513,7 @@ function useWaitingAnnouncement(sessions: AgentSession[]): string {
   return message;
 }
 
-function useNow(intervalMs: number): number {
+export function useNow(intervalMs: number): number {
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), intervalMs);
@@ -529,7 +529,7 @@ function compact(n: number): string {
   return String(Math.round(n));
 }
 
-function duration(ms: number): string {
+export function duration(ms: number): string {
   const m = Math.max(0, Math.floor(ms / 60_000));
   if (m < 1) return "<1m";
   if (m < 60) return `${m}m`;
@@ -538,7 +538,7 @@ function duration(ms: number): string {
   return `${Math.floor(h / 24)}d ${h % 24}h`;
 }
 
-function shortPath(cwd: string): string {
+export function shortPath(cwd: string): string {
   return cwd.replace(/^\/Users\/[^/]+/, "~");
 }
 

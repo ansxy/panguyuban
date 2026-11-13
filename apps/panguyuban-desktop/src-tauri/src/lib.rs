@@ -1,5 +1,6 @@
 mod agents;
 mod builder;
+mod calendar;
 mod spaces;
 mod terminal;
 
@@ -683,6 +684,19 @@ async fn open_agent_folder(cwd: String) -> Result<(), String> {
         .map_err(|e| e.to_string())?
 }
 
+/// Meetings between two instants, from the Mac's Calendar app.
+#[tauri::command]
+async fn calendar_events(from_ms: i64, to_ms: i64) -> Result<Vec<calendar::CalendarEvent>, String> {
+    tokio::task::spawn_blocking(move || calendar::events(from_ms, to_ms))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+fn open_meeting(url: String) -> Result<(), String> {
+    calendar::open_url(&url)
+}
+
 /// Which agent command-line tools the guided builder can use on this machine.
 #[tauri::command]
 async fn builder_agents() -> Result<Vec<builder::HarnessStatus>, String> {
@@ -835,6 +849,8 @@ pub fn run() {
             agent_usage,
             reveal_agent,
             open_agent_folder,
+            calendar_events,
+            open_meeting,
             builder_agents,
             builder_interview_turn,
             builder_plan,

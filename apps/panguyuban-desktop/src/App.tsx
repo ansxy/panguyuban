@@ -17,7 +17,7 @@ import {
   WorkspaceConfig,
 } from "./api";
 import { DiffFiles, FilterTabs, padCount } from "./ui";
-import { AgentsView, SidebarAgents, useAgents } from "./Agents";
+import { AgentsView, shortPath, SidebarAgents, useAgents } from "./Agents";
 import { BuilderView, useBuilder } from "./Builder";
 import { SidebarSpaces, TerminalStages, useSpaces } from "./Spaces";
 import { FolderPanel, PanelMode } from "./FolderPanel";
@@ -982,6 +982,15 @@ export function App(): React.JSX.Element {
                 reviewPrs={reviewPrs}
                 mergePrs={mergePrs}
                 agents={agents.sessions}
+                knownFolders={[
+                  ...spaces.list.map(spaces.cwdOf),
+                  ...agents.sessions.map((s) => shortPath(s.cwd)),
+                  shortPath(localRepoPath),
+                ]}
+                onOpenInTerminal={(folder) => {
+                  spaces.openAt(folder);
+                  setSection("terminal");
+                }}
                 onOpenTicket={(key) => {
                   setTicketView("assigned");
                   setSelectedTicketKey(key);

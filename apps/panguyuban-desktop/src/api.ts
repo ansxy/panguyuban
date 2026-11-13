@@ -626,3 +626,53 @@ export function folderReadFile(path: string): Promise<string> {
 export function folderChanges(path: string): Promise<string[]> {
   return window.__TAURI_INTERNALS__!.invoke<string[]>("folder_changes", { path });
 }
+
+export interface CalendarEvent {
+  id: string;
+  title: string;
+  start_ms: number;
+  end_ms: number;
+  all_day: boolean;
+  calendar: string;
+  location: string | null;
+  join_url: string | null;
+}
+
+/** Meetings overlapping [fromMs, toMs) from the Mac's Calendar app, sorted by start. */
+export async function calendarEvents(fromMs: number, toMs: number): Promise<CalendarEvent[]> {
+  if (window.__TAURI_INTERNALS__?.invoke) {
+    return window.__TAURI_INTERNALS__.invoke<CalendarEvent[]>("calendar_events", { fromMs, toMs });
+  }
+  return demoEvents().filter((e) => e.end_ms > fromMs && e.start_ms < toMs);
+}
+
+export async function openMeeting(url: string): Promise<void> {
+  if (window.__TAURI_INTERNALS__?.invoke) {
+    return window.__TAURI_INTERNALS__.invoke<void>("open_meeting", { url });
+  }
+  window.open(url, "_blank", "noreferrer");
+}
+
+/** A plausible week around today, so the browser preview has meetings to show. */
+function demoEvents(): CalendarEvent[] {
+  const day = new Date();
+  day.setHours(0, 0, 0, 0);
+  const at = (dayOffset: number, h: number, m = 0) => day.getTime() + dayOffset * 86_400_000 + (h * 60 + m) * 60_000;
+  const now = Date.now();
+  const nowSlot = Math.floor(now / 1_800_000) * 1_800_000;
+  const meet = "https://meet.google.com/abc-defg-hij";
+  const ev = (id: string, title: string, start: number, mins: number, join: string | null = meet): CalendarEvent => ({
+    id, title, start_ms: start, end_ms: start + mins * 60_000, all_day: false, calendar: "Work", location: null, join_url: join,
+  });
+  return [
+    ev("d1", "Daily standup", at(0, 9, 30), 15),
+    ev("d2", "Sprint planning", nowSlot, 60),
+    ev("d3", "1:1 with tech lead", nowSlot + 90 * 60_000, 30),
+    ev("d4", "Claims API review", at(0, 16), 45, null),
+    ev("d5", "Daily standup", at(1, 9, 30), 15),
+    ev("d6", "Hospital onboarding sync", at(1, 14), 60),
+    ev("d7", "Retro", at(3, 15), 60),
+    ev("d8", "Daily standup", at(-1, 9, 30), 15),
+    ev("d9", "Architecture guild", at(-2, 13), 90, null),
+  ].sort((a, b) => a.start_ms - b.start_ms);
+}
