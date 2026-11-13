@@ -32,7 +32,7 @@ The app shows your file in a locked frame with no access to the network or to st
 
 ## 3. Written so an engineer can read it
 
-- **The data first.** Start the script with the made-up records as plain constants (`const CLAIMS = [...]`), then the state, then small named functions. No clever tricks.
+- **The data first.** Start the script with the made-up records as plain constants (`const ORDERS = [...]`), then the state, then small named functions. No clever tricks.
 - **Mark each screen with its step.** The element holding a screen carries `data-step="S1"` (or `"S1 S2"` when steps share a screen).
 - **Mark what is pretend.** Put `// PRETEND: <what the real app must do instead>` above any imitation, so the engineer sees every gap.
 - **Design decisions as variables.** Colours, spacing, radius and font sizes go in `:root` as CSS custom properties with plain names (`--color-surface`, `--space-md`), and the rest of the CSS uses only those.
@@ -40,7 +40,7 @@ The app shows your file in a locked frame with no access to the network or to st
 
 ## 4. What makes the client believe it
 
-- **Realistic made-up data, the same on every screen.** A claim that is "CLM-2041, Rina Hartono, Under review" in the list is that on its detail screen. Enough rows to look real (the PRD often says how many). Never real people, clients, patients or policyholders, and no lorem ipsum.
+- **Realistic made-up data, the same on every screen.** A order that is "ORD-2041, Rina Hartono, Under review" in the list is that on its detail screen. Enough rows to look real (the PRD often says how many). Never real people, clients or customers, and no lorem ipsum.
 - **Wording from the PRD.** Button labels, messages and column names exactly as the acceptance criteria give them, in the PRD's language.
 - **Every state the PRD names.** The empty list, the error message, the "done" look: each must be reachable by using the page.
 - **One main action per screen**, visually the strongest thing on it.

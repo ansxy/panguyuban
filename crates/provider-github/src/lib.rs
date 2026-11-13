@@ -644,9 +644,9 @@ mod tests {
     #[test]
     fn parses_graphql_pr_search_with_review_ci_and_merge_state() {
         let raw = r#"{ "data": { "search": { "nodes": [
-            { "number": 1833, "title": "fix: payer mapping", "url": "https://github.com/REY-ID/rey-ehr/pull/1833",
-              "repository": { "nameWithOwner": "REY-ID/rey-ehr" }, "author": { "login": "ansxy" },
-              "headRefName": "fix/REY-12127", "baseRefName": "main",
+            { "number": 1833, "title": "fix: price mapping", "url": "https://github.com/acme/backend/pull/1833",
+              "repository": { "nameWithOwner": "acme/backend" }, "author": { "login": "ansxy" },
+              "headRefName": "fix/ABC-123", "baseRefName": "main",
               "mergeable": "MERGEABLE", "mergeStateStatus": "CLEAN", "additions": 5, "deletions": 1,
               "reviewDecision": "APPROVED",
               "commits": { "nodes": [ { "commit": { "statusCheckRollup": { "contexts": { "nodes": [
@@ -654,8 +654,8 @@ mod tests {
                   { "status": "IN_PROGRESS", "conclusion": null },
                   { "state": "FAILURE" }
               ] } } } } ] } },
-            { "number": 102, "title": "feat: care status", "url": "u",
-              "repository": { "nameWithOwner": "REY-Solution/rey-medisure" }, "author": null,
+            { "number": 102, "title": "feat: order status", "url": "u",
+              "repository": { "nameWithOwner": "acme/web" }, "author": null,
               "headRefName": "feat/x", "baseRefName": "develop",
               "mergeable": "CONFLICTING", "mergeStateStatus": "DIRTY", "reviewDecision": null,
               "commits": { "nodes": [ { "commit": { "statusCheckRollup": null } } ] } },
@@ -663,9 +663,9 @@ mod tests {
         ] } } }"#;
         let prs = parse_github_pr_search(raw, true).unwrap();
         assert_eq!(prs.len(), 2);
-        assert_eq!(prs[0].repo, "REY-ID/rey-ehr");
+        assert_eq!(prs[0].repo, "acme/backend");
         assert_eq!(prs[0].author, "@ansxy");
-        assert_eq!(prs[0].linked_ticket_key, Some("REY-12127".to_string()));
+        assert_eq!(prs[0].linked_ticket_key, Some("ABC-123".to_string()));
         assert_eq!(prs[0].review_state, ReviewState::Approved);
         assert_eq!(prs[0].ci_state, CiState::Failing { failed: 1, total: 3 });
         assert!(prs[0].mergeable && prs[0].review_requested);

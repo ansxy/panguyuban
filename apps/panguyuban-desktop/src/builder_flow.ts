@@ -234,11 +234,11 @@ export const DEMO_QUESTIONS: Question[] = [
 ];
 
 const ENGINEER_HINTS =
-  /\b(real|live|production|integrat\w*|api|sign[- ]?in|log[- ]?in|login|sso|payment|pay|e-?mail|sms|whatsapp|upload|import|export|bpjs)\b/i;
+  /\b(real|live|production|integrat\w*|api|sign[- ]?in|log[- ]?in|login|sso|payment|pay|e-?mail|sms|whatsapp|upload|import|export)\b/i;
 const HARD_HINTS =
   /\b(history|timeline|report|dashboard|chart|graph|calculat\w*|approv\w*|workflow|rules?|search|compare|schedule|notif\w*|permission\w*|roles?)\b/i;
 const REAL_DATA_HINTS =
-  /\b(real|actual|live|production|asli)\b[^.\n]{0,24}\b(data|records?|patients?|members?|claims?|policy\w*)\b/i;
+  /\b(real|actual|live|production|asli)\b[^.\n]{0,24}\b(data|records?|customers?|users?|members?|orders?|accounts?)\b/i;
 
 const now = () => Date.now();
 
@@ -607,7 +607,7 @@ export function userSays(p: Project, raw: string): Project {
         next = say(
           next,
           "agent",
-          "One note: prototypes use made-up sample data only, never real client, patient or policyholder records. I'll plan for realistic samples."
+          "One note: prototypes use made-up sample data only, never real client, customer or personal records. I'll plan for realistic samples."
         );
       }
       if (q.key === "walkthrough" && splitLines(text).length === 0) {
@@ -940,7 +940,7 @@ export function lockedDesign(html: string): string {
 }
 
 export const SETUP_STEPS = [
-  "Create the project from the REY template",
+  "Create the project from the project template",
   "Add made-up sample data",
   "Start the preview",
   "Run the standards checks",
@@ -949,7 +949,7 @@ export const SETUP_STEPS = [
 export function finishSetup(p: Project): Project {
   if (p.stage !== "setup") return p;
   let next: Project = { ...p, stage: "build", checksPassing: true };
-  next = record(next, "build", "Project set up from the REY template. Standards checks passing.");
+  next = record(next, "build", "Project set up from the project template. Standards checks passing.");
   const first = currentStory(next);
   return say(next, "agent", `Ready. Next step: ${first?.id} ${first?.title}.`);
 }
@@ -1207,7 +1207,7 @@ export function prdMarkdown(p: Project): string {
     `## 3. People\n\n${a.people ?? "-"}`,
     `## 4. Stories\n\n${stories || "-"}`,
     `## 5. Scope\n\n### Must have for the demo\n${bullets(p.stories.map((s) => `${s.id} ${s.title}`))}\n\n### Later\n${bullets(p.later)}`,
-    `## 6. Real or pretend\n\n${a.real ?? "-"}\n\nInformation shown: ${a.information ?? "-"}\n\nAll data is made-up sample data. No real client, patient or policyholder records.`,
+    `## 6. Real or pretend\n\n${a.real ?? "-"}\n\nInformation shown: ${a.information ?? "-"}\n\nAll data is made-up sample data. No real client, customer or personal records.`,
     `## 8. Promises already made to the client\n\n${a.promises ?? "-"}`,
     `## 10. Open questions\n\n${bullets(p.openQuestions)}`,
     `## 11. Decisions and scope changes\n\n${bullets(scope.map((l) => `${day(l.at)}: ${l.text}`))}`,

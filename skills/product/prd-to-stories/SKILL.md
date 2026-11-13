@@ -44,15 +44,15 @@ Set `needs_engineer` to `true` only when section 6 (*Real or pretend*) or the st
 - sending real email, SMS or chat messages
 - taking a payment
 - importing a real file or real records
-- any real personal, patient, policyholder or client-staff data, in any form
+- any real personal, customer or client-staff data, in any form
 
-If the PRD marks the thing as pretend, or it runs on made-up sample data inside the prototype, it does **not** need an engineer. A todo list, a sample claims list, a pretend sign-in screen: all `false`.
+If the PRD marks the thing as pretend, or it runs on made-up sample data inside the prototype, it does **not** need an engineer. A todo list, a sample orders list, a pretend sign-in screen: all `false`.
 
 ## 4. The reason
 
 One short sentence per step, in plain language, saying why you chose that size and, if flagged, what the engineer has to agree to.
 
-- Good: "One screen showing sample claims, nothing depends on it yet."
+- Good: "One screen showing sample orders, nothing depends on it yet."
 - Good: "Signing in with the client's own accounts touches their real system, so an engineer has to agree first."
 - Bad: "Requires state management and API integration."
 

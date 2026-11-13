@@ -57,7 +57,7 @@ The user only picks product-level things. They never choose between backend, fro
 | Change something | `change-request` | any in `skills/engineering/` | PRD approved |
 | Hand over to engineering | `handover-writer` | none | PRD approved |
 
-A build session works on one story from `prd.md`. The agent loads whichever engineering skills that story needs; the REY skills already refer to each other (design tables, then the backend layers, then the pages), so binding a session to a single one would cut that chain.
+A build session works on one story from `prd.md`. The agent loads whichever engineering skills that story needs; the engineering skills already refer to each other (design tables, then the backend layers, then the pages), so binding a session to a single one would cut that chain.
 
 The mapping lives in `skills/registry.toml`, not in code, so engineering can add session types without a release of the UI.
 
@@ -78,7 +78,7 @@ user -> interview -> prototype -> show client -> hand over to engineering
 | 4 | Show | Shows the file to the client, then answers three questions | Records the reaction, what was promised in the room, and what they asked for next. A change asked for before showing goes back to stage 3 | Three answers |
 | 5 | Hand over | Chooses **Hand over to engineering** or **Build it here** | Hand over writes `handover.md` and locks the prototype | None for a prototype |
 | 6 | Plan (build path) | Reads the sizing; clears or defers flagged steps | Runs `prd-to-stories` | Flagged steps cleared |
-| 7 | Set up (build path) | Waits | Scaffolds from the REY template | Standards checks pass |
+| 7 | Set up (build path) | Waits | Scaffolds from the project template | Standards checks pass |
 | 8 | Build (build path) | Confirms each step against its acceptance lines | Builds one step at a time with the assigned agent, runs checks | Checks pass and user confirms |
 | 9 | Hand over (build path) | Hands over the built app | Writes `handover.md` naming the agent per step | Standards checks pass |
 
@@ -205,11 +205,11 @@ skills/
 │   ├── prd-to-stories/      # slices the approved PRD into build stories
 │   └── handover-writer/
 └── engineering/             # govern how code is written; never shown to the user
-    ├── rey-nextjs-app/
-    ├── rey-db-design/
-    ├── rey-nextjs-module/
-    ├── rey-nextjs-frontend/
-    └── rey-nextjs-unit-test/
+    ├── nextjs-app/
+    ├── db-design/
+    ├── nextjs-module/
+    ├── nextjs-frontend/
+    └── nextjs-unit-test/
 ```
 
 The two sections have different owners and different rules. Product skills decide *what* is built and must never ask technical questions. Engineering skills decide *how* it is built and are not open to the user's input.
