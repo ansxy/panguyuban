@@ -1,7 +1,39 @@
 import React from "react";
 
-export function padCount(count: number): string {
-  return String(count).padStart(2, "0");
+const ICONS = {
+  home: "M2.5 7.5 8 3l5.5 4.5V13a.5.5 0 0 1-.5.5H3a.5.5 0 0 1-.5-.5z M6.5 13.5v-4h3v4",
+  ticket: "M4 3.5h8A1.5 1.5 0 0 1 13.5 5v6a1.5 1.5 0 0 1-1.5 1.5H4A1.5 1.5 0 0 1 2.5 11V5A1.5 1.5 0 0 1 4 3.5z M5.5 6.5h5 M5.5 9.5h3",
+  pr: "M4.5 5.5v5 M6 4a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0z M6 12a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0z M13 12a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0z M11.5 10.5V7a2 2 0 0 0-2-2H8",
+  agents: "M8 2.5l1.4 4.1 4.1 1.4-4.1 1.4L8 13.5l-1.4-4.1L2.5 8l4.1-1.4z",
+  prototypes: "M4 2.5h8A1.5 1.5 0 0 1 13.5 4v8a1.5 1.5 0 0 1-1.5 1.5H4A1.5 1.5 0 0 1 2.5 12V4A1.5 1.5 0 0 1 4 2.5z M2.5 6h11 M6.5 6v7.5",
+  requests: "M3 5.5h9.5 M10 3l2.5 2.5L10 8 M13 10.5H3.5 M6 8l-2.5 2.5L6 13",
+  settings: "M2.5 5h6 M11.5 5h2 M11.5 5a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0z M2.5 11h2 M7.5 11h6 M7.5 11a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0z",
+  collapse: "M7.5 4l-4 4 4 4 M12.5 4l-4 4 4 4",
+  expand: "M8.5 4l4 4-4 4 M3.5 4l4 4-4 4",
+  refresh: "M13 8a5 5 0 1 1-1.5-3.5 M13.5 2.5V5H11",
+  files: "M2.5 4h4L8 5.5h5.5V13h-11z",
+  changes: "M8 3v5 M5.5 5.5h5 M5.5 11.5h5",
+} as const;
+
+export type IconName = keyof typeof ICONS;
+
+/** 16px line icon in the current text colour. Decorative: label the button, not the icon. */
+export function Icon({ name, size = 16 }: { name: IconName; size?: number }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d={ICONS[name]} />
+    </svg>
+  );
 }
 
 /** Segmented filter above a list (replaces the old per-filter sidebar menu). */

@@ -78,7 +78,7 @@ type Tab = "steps" | "preview" | "prd" | "record";
 const SETUP_STEP_MS = 700;
 
 /** Prototypes kept on this machine, with the one being worked on. */
-export function useBuilder() {
+export function useBuilder(enabled = true) {
   const [projects, setProjects] = useState<Project[]>(() => loadProjects());
   const [selectedId, setSelectedId] = useState<string | null>(() => loadProjects()[0]?.id ?? null);
 
@@ -87,10 +87,11 @@ export function useBuilder() {
   useEffect(() => saveProjects(projects), [projects]);
 
   useEffect(() => {
+    if (!enabled) return;
     builderAgents()
       .then(setHarnesses)
       .catch(() => setHarnesses([]));
-  }, []);
+  }, [enabled]);
 
   const project = projects.find((p) => p.id === selectedId) ?? null;
 

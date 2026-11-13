@@ -1,13 +1,14 @@
 import React, { useEffect, useRef, useState } from "react";
 import { AgentSession, CalendarEvent, calendarEvents, folderList, openMeeting, PullRequest, Ticket } from "./api";
 import { duration, useNow } from "./Agents";
-import { padCount } from "./ui";
+import type { FeatureKey } from "./features";
 
 const DAY_MS = 86_400_000;
 const CALENDAR_POLL_MS = 5 * 60_000;
 
 /** Home: today's meetings and calendar beside what needs you across tickets, PRs and agents. */
 export function OverviewView(props: {
+  features: Record<FeatureKey, boolean>;
   myActiveTickets: Ticket[];
   reviewPrs: PullRequest[];
   mergePrs: PullRequest[];
@@ -21,7 +22,8 @@ export function OverviewView(props: {
 }) {
   const { myActiveTickets, reviewPrs, mergePrs } = props;
   const now = useNow(30_000);
-  const cal = useCalendar();
+  const { features } = props;
+  const cal = useCalendar(features.meetings);
   const folders = useProjectFolders(props.knownFolders);
   const [ticketFolders, setTicketFolder] = useTicketFolders();
   // Waiting first: those are the ones blocked on you.
@@ -29,6 +31,7 @@ export function OverviewView(props: {
     .filter((a) => a.status !== "idle")
     .sort((a, b) => Number(b.status === "waiting") - Number(a.status === "waiting"));
   const waiting = liveAgents.filter((a) => a.status === "waiting").length;
+  const anyCard = features.agents || features.prs || features.tickets;
   const meetingsLeft = (cal.byDay.get(dayKey(new Date(now))) ?? []).filter((e) => !e.all_day && e.end_ms > now).length;
 
   return (
@@ -40,28 +43,46 @@ export function OverviewView(props: {
           </span>
           <h1>{greeting(now)}</h1>
         </div>
-        <span className="lead overview-summary">
-          {meetingsLeft ? `${meetingsLeft} meeting${meetingsLeft === 1 ? "" : "s"} left today` : "No more meetings today"}
-        </span>
+        {features.meetings && (
+          <span className="lead overview-summary">
+            {meetingsLeft ? `${meetingsLeft} meeting${meetingsLeft === 1 ? "" : "s"} left today` : "No more meetings today"}
+          </span>
+        )}
       </div>
 
-      <div className="overview-layout">
+      <div className="overview-layout" data-no-rail={!features.meetings || undefined}>
         <div className="overview-main">
-          <MeetingNow events={cal.events} error={cal.error} now={now} />
+          {features.meetings && <MeetingNow events={cal.events} error={cal.error} now={now} />}
 
-          <dl className="overview-stats">
-            <Stat label="Tickets in progress" value={myActiveTickets.length} />
-            <Stat label="PRs to review" value={reviewPrs.length} />
-            <Stat label="Ready to merge" value={mergePrs.length} />
-            <Stat label="Agents need you" value={waiting} alert={waiting > 0} />
-          </dl>
-
-          <div className="settings-grid">
+          {anyCard && (
+          <div className="overview-grid">
+            {features.agents && (
+            <Card title="Agents" alert={waiting > 0} empty="No agents working">
+              {liveAgents.map((a) => (
+                <Row
+                  key={a.session_id}
+                  id={a.name}
+                  chip={a.status === "waiting" ? "Needs you" : undefined}
+                  bad={a.status === "waiting"}
+                  title={a.cwd}
+                  onOpen={() => props.onOpenAgent(a.session_id)}
+                />
+              ))}
+            </Card>
+            )}
+            {features.prs && (
+            <Card title="Review requested" empty="No reviews waiting">
+              {reviewPrs.map((p) => (
+                <PrRow key={`${p.repo}#${p.number}`} pr={p} onOpen={() => props.onOpenPr(p, "review")} />
+              ))}
+            </Card>
+            )}
+            {features.tickets && (
             <Card title="My tickets in progress" empty="Nothing in progress">
               {myActiveTickets.map((t) => {
                 const folder = ticketFolders[t.key] ?? ticketFolders[LAST_FOLDER] ?? "";
                 return (
-                  <Row key={t.key} id={t.key} chip={t.state} title={t.title} onOpen={() => props.onOpenTicket(t.key)}>
+                  <Row key={t.key} id={t.key} chip={t.state === "InReview" ? "In review" : undefined} title={t.title} onOpen={() => props.onOpenTicket(t.key)}>
                     <div className="ticket-terminal">
                       <FolderPicker
                         id={`project-${t.key}`}
@@ -86,42 +107,31 @@ export function OverviewView(props: {
                 );
               })}
             </Card>
-            <Card title="Agents" empty="No agents working">
-              {liveAgents.map((a) => (
-                <Row
-                  key={a.session_id}
-                  id={a.name}
-                  chip={a.status === "waiting" ? "Needs you" : "Working"}
-                  bad={a.status === "waiting"}
-                  title={a.cwd}
-                  onOpen={() => props.onOpenAgent(a.session_id)}
-                />
-              ))}
-            </Card>
-            <Card title="Review requested" empty="No reviews waiting">
-              {reviewPrs.map((p) => (
-                <PrRow key={`${p.repo}#${p.number}`} pr={p} onOpen={() => props.onOpenPr(p, "review")} />
-              ))}
-            </Card>
+            )}
+            {features.prs && (
             <Card title="Ready to merge" empty="Nothing approved yet">
               {mergePrs.map((p) => (
                 <PrRow key={`${p.repo}#${p.number}`} pr={p} onOpen={() => props.onOpenPr(p, "merge")} />
               ))}
             </Card>
+            )}
           </div>
+          )}
         </div>
 
-        <aside className="overview-rail" aria-label="Calendar">
-          <MonthCalendar cal={cal} now={now} />
-          <Agenda day={cal.selected} events={cal.byDay.get(dayKey(cal.selected)) ?? []} now={now} />
-        </aside>
+        {features.meetings && (
+          <aside className="overview-rail" aria-label="Calendar">
+            <MonthCalendar cal={cal} now={now} />
+            <Agenda day={cal.selected} events={cal.byDay.get(dayKey(cal.selected)) ?? []} now={now} />
+          </aside>
+        )}
       </div>
     </section>
   );
 }
 
 /** The shown month's events (plus today's, for the meeting card), refreshed every few minutes. */
-function useCalendar() {
+function useCalendar(enabled: boolean) {
   const [month, setMonth] = useState(() => startOfMonth(new Date()));
   const [selected, setSelected] = useState(() => startOfDay(new Date()));
   const [events, setEvents] = useState<CalendarEvent[]>([]);
@@ -133,6 +143,7 @@ function useCalendar() {
   const to = Math.max(days[days.length - 1].getTime() + DAY_MS, today + DAY_MS);
 
   useEffect(() => {
+    if (!enabled) return;
     const load = () =>
       calendarEvents(from, to)
         .then((list) => {
@@ -145,7 +156,7 @@ function useCalendar() {
       if (document.visibilityState === "visible") void load();
     }, CALENDAR_POLL_MS);
     return () => clearInterval(timer);
-  }, [from, to]);
+  }, [from, to, enabled]);
 
   // Day key -> events touching that day; an all-day or overnight event lands on each of its days.
   const byDay = new Map<string, CalendarEvent[]>();
@@ -313,24 +324,22 @@ function Agenda({ day, events, now }: { day: Date; events: CalendarEvent[]; now:
   );
 }
 
-function Stat(props: { label: string; value: number; alert?: boolean }) {
-  return (
-    <div className="overview-stat" data-alert={props.alert || undefined}>
-      <dt>{props.label}</dt>
-      <dd className="measured-ink">{padCount(props.value)}</dd>
-    </div>
-  );
-}
-
-function Card(props: { title: string; empty: string; children: React.ReactNode[] }) {
+function Card(props: { title: string; empty: string; alert?: boolean; children: React.ReactNode[] }) {
+  const count = props.children.length;
+  if (!count) {
+    return (
+      <div className="overview-card" data-empty>
+        <h2>{props.title}</h2>
+        <span className="overview-card-empty">{props.empty}</span>
+      </div>
+    );
+  }
   return (
     <div className="overview-card">
-      <h2>{props.title}</h2>
-      {props.children.length ? (
-        <ul className="record-list">{props.children}</ul>
-      ) : (
-        <p className="record-meta">{props.empty}</p>
-      )}
+      <h2>
+        {props.title} <span className="measured overview-count" data-alert={props.alert || undefined}>{count}</span>
+      </h2>
+      <ul className="record-list">{props.children}</ul>
     </div>
   );
 }
@@ -340,7 +349,7 @@ function PrRow({ pr, onOpen }: { pr: PullRequest; onOpen: () => void }) {
   return (
     <Row
       id={`${pr.repo.split("/").pop()}#${pr.number}`}
-      chip={failing ? "CI failing" : pr.review_state}
+      chip={failing ? "CI failing" : undefined}
       bad={failing}
       title={pr.title}
       onOpen={onOpen}
@@ -350,7 +359,8 @@ function PrRow({ pr, onOpen }: { pr: PullRequest; onOpen: () => void }) {
 
 function Row(props: {
   id: string;
-  chip: string;
+  /** Only when it adds to the section heading (a failing check, a different state). */
+  chip?: string;
   bad?: boolean;
   title: string;
   onOpen: () => void;
@@ -362,9 +372,9 @@ function Row(props: {
         <button type="button" className="record-select-btn" onClick={props.onOpen}>
           {props.id}
         </button>
-        <span className={props.bad ? "chip chip--bad" : "chip chip--ok"}>{props.chip}</span>
+        <span className="record-title" title={props.title}>{props.title}</span>
+        {props.chip && <span className={props.bad ? "chip chip--bad" : "chip"}>{props.chip}</span>}
       </div>
-      <div className="record-title">{props.title}</div>
       {props.children}
     </li>
   );

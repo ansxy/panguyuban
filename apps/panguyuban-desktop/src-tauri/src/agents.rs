@@ -117,6 +117,15 @@ pub struct AgentTracker {
 }
 
 impl AgentTracker {
+    /// Asks a session's process to exit (SIGTERM). Only the pid of a live tracked
+    /// session is accepted, so a stale or made-up pid cannot hit another process.
+    pub fn kill(&self, pid: i32) -> Result<(), String> {
+        if !self.sessions().iter().any(|s| s.pid == pid) {
+            return Err("That session is no longer running".into());
+        }
+        terminate(pid)
+    }
+
     pub fn sessions(&self) -> Vec<AgentSession> {
         let Some(home) = dirs::home_dir() else {
             return Vec::new();
@@ -704,6 +713,20 @@ fn windows(mut entries: Vec<UsageEntry>, now: f64, midnight: f64) -> UsageReport
         today,
         week,
     }
+}
+
+#[cfg(unix)]
+fn terminate(pid: i32) -> Result<(), String> {
+    if unsafe { libc::kill(pid, libc::SIGTERM) } == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error().to_string())
+    }
+}
+
+#[cfg(not(unix))]
+fn terminate(_pid: i32) -> Result<(), String> {
+    Err("Ending sessions is not supported on this platform yet".into())
 }
 
 #[cfg(unix)]

@@ -69,127 +69,21 @@ declare global {
   }
 }
 
-const INITIAL_DEMO_STATE: DashboardPayload = {
-  tickets: [
-    {
-      id: "b62f8d9a-0142",
-      key: "PAN-142",
-      title: "Fix JWT refresh race on concurrent requests",
-      description:
-        "When two requests expire within the same millisecond, parallel refresh calls invalidate the first rotated token. Guard rotation with an async mutex inside the session store.",
-      state: "InReview",
-      assignee: "@ansar",
-      priority: "high",
-      updated_at: "2026-11-11T02:14:09Z",
-      url: "https://app.plane.so/panguyuban/issues/PAN-142",
-      assigned_to_me: true,
-    },
-    {
-      id: "b62f8d9a-0145",
-      key: "PAN-145",
-      title: "Add exponential backoff to webhook delivery",
-      description:
-        "Failed webhook deliveries currently retry immediately and trip downstream rate limits. Schedule retries with jitter over 5 attempts.",
-      state: "InProgress",
-      assignee: "@alex",
-      priority: "medium",
-      updated_at: "2026-11-11T02:20:00Z",
-      url: "https://app.plane.so/panguyuban/issues/PAN-145",
-      assigned_to_me: false,
-    },
-    {
-      id: "b62f8d9a-0149",
-      key: "PAN-149",
-      title: "Expose rate-limit headers on public endpoints",
-      description:
-        "Return X-RateLimit-Limit, X-RateLimit-Remaining, and X-RateLimit-Reset on all authenticated API routes.",
-      state: "Todo",
-      assignee: "@ansar",
-      priority: "low",
-      updated_at: "2026-11-11T02:30:00Z",
-      url: "https://app.plane.so/panguyuban/issues/PAN-149",
-      assigned_to_me: true,
-    },
-  ],
-  pull_requests: [
-    {
-      repo: "ansar/panguyuban",
-      review_requested: false,
-      number: 89,
-      title: "fix(auth): serialize token refresh with mutex",
-      author: "@ansar",
-      source_branch: "fix/pan-142-jwt",
-      target_branch: "main",
-      mergeable: true,
-      additions: 84,
-      deletions: 19,
-      review_state: "Approved",
-      ci_state: { Passing: { passed: 3, total: 3 } },
-      linked_ticket_key: "PAN-142",
-      diff_preview: [
-        "@@ -42,7 +42,9 @@ impl TokenManager {",
-        "-    let next = self.client.refresh(&current).await?;",
-        "+    let _guard = self.refresh_lock.lock().await;",
-        "+    let next = self.client.refresh(&current).await?;",
-      ],
-      url: "https://github.com/ansar/panguyuban/pull/89",
-    },
-    {
-      repo: "ansar/panguyuban",
-      review_requested: true,
-      number: 92,
-      title: "feat(webhook): bounded retry queue with jitter",
-      author: "@alex",
-      source_branch: "feat/pan-145-webhook",
-      target_branch: "main",
-      mergeable: true,
-      additions: 142,
-      deletions: 11,
-      review_state: "ReviewRequired",
-      ci_state: { Passing: { passed: 2, total: 3 } },
-      linked_ticket_key: "PAN-145",
-      diff_preview: [
-        "@@ -18,4 +18,8 @@ pub fn next_backoff(attempt: u32) -> Duration {",
-        "+    let base = 2_u64.saturating_pow(attempt);",
-        "+    Duration::from_secs(base.min(300))",
-      ],
-      url: "https://github.com/ansar/panguyuban/pull/92",
-    },
-    {
-      repo: "ansar/infra",
-      review_requested: true,
-      number: 94,
-      title: "chore(cargo): bump tokio and reqwest crates",
-      author: "@sarah",
-      source_branch: "chore/tokio-bump",
-      target_branch: "main",
-      mergeable: true,
-      additions: 18,
-      deletions: 18,
-      review_state: "ReviewRequired",
-      ci_state: { Passing: { passed: 3, total: 3 } },
-      linked_ticket_key: null,
-      diff_preview: [
-        "@@ -12,2 +12,2 @@ [dependencies]",
-        '-tokio = "1.39"',
-        '+tokio = "1.54"',
-      ],
-      url: "https://github.com/ansar/panguyuban/pull/94",
-    },
-  ],
+// Outside the desktop app (plain browser) there is no backend: start empty.
+let fallbackState: DashboardPayload = {
+  tickets: [],
+  pull_requests: [],
   config: {
     issue_provider: "plane.so",
     plane_base_url: "https://api.plane.so",
-    plane_workspace_slug: "panguyuban",
-    plane_project_id: "panguyuban-core",
+    plane_workspace_slug: "",
+    plane_project_id: "",
     git_provider: "github",
     github_api_url: "https://api.github.com",
     github_repo: "",
     local_repo_path: ".",
   },
 };
-
-let fallbackState: DashboardPayload = structuredClone(INITIAL_DEMO_STATE);
 
 export async function getDashboardState(): Promise<DashboardPayload> {
   if (window.__TAURI_INTERNALS__?.invoke) {
@@ -394,56 +288,30 @@ export interface UsageReport {
   week: TokenWindow;
 }
 
-const minutesAgo = (m: number) => Date.now() - m * 60_000;
-
-/** Browser-preview data only; the desktop app reads real sessions. */
-const DEMO_AGENTS: AgentSession[] = [
-  {
-    harness: "claude", session_id: "demo-1", pid: 1, cwd: "~/project/panguyuban", name: "panguyuban",
-    status: "waiting", started_ms: minutesAgo(48), status_since_ms: minutesAgo(3), model: "claude-opus-5-5",
-    input_tokens: 3_748_641, output_tokens: 154_319,
-    subagents: [
-      { id: "a1", description: "Map top-bar agent tracker", agent_type: "Explore", started_ms: minutesAgo(9), last_active_ms: minutesAgo(6), finished: true, input_tokens: 195_134, output_tokens: 4_134 },
-      { id: "a2", description: "Research dashboard design", agent_type: "general-purpose", started_ms: minutesAgo(4), last_active_ms: minutesAgo(0), finished: false, input_tokens: 74_628, output_tokens: 125 },
-    ],
-  },
-  {
-    harness: "claude", session_id: "demo-2", pid: 2, cwd: "~/project/billing-api", name: "billing-api",
-    status: "busy", started_ms: minutesAgo(130), status_since_ms: minutesAgo(1), model: "claude-sonnet-5-5",
-    input_tokens: 1_081_077, output_tokens: 41_245, subagents: [],
-  },
-  {
-    harness: "antigravity", session_id: "demo-3", pid: 3, cwd: "~/project/web-dashboard", name: "web-dashboard",
-    status: "idle", started_ms: minutesAgo(300), status_since_ms: minutesAgo(22), model: null,
-    input_tokens: 602_849, output_tokens: 18_210, subagents: [],
-  },
-];
-
-const demoWindow = (effective: number): TokenWindow => ({
-  input: effective * 0.2, output: effective * 0.05, cache_write: effective * 0.15, cache_read: effective * 6,
-  effective, oldest_ms: minutesAgo(190),
-});
-
 export async function agentSessions(): Promise<AgentSession[]> {
   if (window.__TAURI_INTERNALS__?.invoke) {
     return window.__TAURI_INTERNALS__.invoke<AgentSession[]>("agent_sessions");
   }
-  return structuredClone(DEMO_AGENTS);
+  return [];
 }
 
 export async function agentUsage(): Promise<UsageReport[]> {
   if (window.__TAURI_INTERNALS__?.invoke) {
     return window.__TAURI_INTERNALS__.invoke<UsageReport[]>("agent_usage");
   }
-  return [
-    { harness: "claude", five_hour: demoWindow(5_436_594), today: demoWindow(7_277_385), week: demoWindow(23_317_357) },
-    { harness: "antigravity", five_hour: demoWindow(602_849), today: demoWindow(4_684_917), week: demoWindow(8_280_576) },
-  ];
+  return [];
 }
 
 export async function revealAgent(pid: number, cwd: string): Promise<void> {
   if (window.__TAURI_INTERNALS__?.invoke) {
     return window.__TAURI_INTERNALS__.invoke<void>("reveal_agent", { pid, cwd });
+  }
+}
+
+/** Ends the session's process. The backend only accepts pids of live tracked sessions. */
+export async function killAgent(pid: number): Promise<void> {
+  if (window.__TAURI_INTERNALS__?.invoke) {
+    return window.__TAURI_INTERNALS__.invoke<void>("kill_agent", { pid });
   }
 }
 
@@ -628,6 +496,29 @@ export function folderChanges(path: string): Promise<string[]> {
   return window.__TAURI_INTERNALS__!.invoke<string[]>("folder_changes", { path });
 }
 
+export interface HttpRequest {
+  method: string;
+  url: string;
+  headers: [string, string][];
+  body: string;
+}
+
+export interface HttpResponse {
+  status: number;
+  status_text: string;
+  headers: [string, string][];
+  /** First 2 MB only; `truncated` says whether more was dropped. */
+  body: string;
+  size: number;
+  truncated: boolean;
+  elapsed_ms: number;
+}
+
+/** Sends a request from Rust (no CORS); rejects on network or URL errors. */
+export function sendHttp(request: HttpRequest): Promise<HttpResponse> {
+  return window.__TAURI_INTERNALS__!.invoke<HttpResponse>("send_http", { request });
+}
+
 export interface CalendarEvent {
   id: string;
   title: string;
@@ -645,7 +536,7 @@ export async function calendarEvents(fromMs: number, toMs: number): Promise<Cale
   if (window.__TAURI_INTERNALS__?.invoke) {
     return window.__TAURI_INTERNALS__.invoke<CalendarEvent[]>("calendar_events", { fromMs, toMs });
   }
-  return demoEvents().filter((e) => e.end_ms > fromMs && e.start_ms < toMs);
+  return [];
 }
 
 /** Keeps a copy of an .ics file's text as the imported calendar; returns how many events it has. */
@@ -661,28 +552,4 @@ export async function openMeeting(url: string): Promise<void> {
     return window.__TAURI_INTERNALS__.invoke<void>("open_meeting", { url });
   }
   window.open(url, "_blank", "noreferrer");
-}
-
-/** A plausible week around today, so the browser preview has meetings to show. */
-function demoEvents(): CalendarEvent[] {
-  const day = new Date();
-  day.setHours(0, 0, 0, 0);
-  const at = (dayOffset: number, h: number, m = 0) => day.getTime() + dayOffset * 86_400_000 + (h * 60 + m) * 60_000;
-  const now = Date.now();
-  const nowSlot = Math.floor(now / 1_800_000) * 1_800_000;
-  const meet = "https://meet.google.com/abc-defg-hij";
-  const ev = (id: string, title: string, start: number, mins: number, join: string | null = meet): CalendarEvent => ({
-    id, title, start_ms: start, end_ms: start + mins * 60_000, all_day: false, calendar: "Work", location: null, join_url: join,
-  });
-  return [
-    ev("d1", "Daily standup", at(0, 9, 30), 15),
-    ev("d2", "Sprint planning", nowSlot, 60),
-    ev("d3", "1:1 with tech lead", nowSlot + 90 * 60_000, 30),
-    ev("d4", "Orders API review", at(0, 16), 45, null),
-    ev("d5", "Daily standup", at(1, 9, 30), 15),
-    ev("d6", "Customer onboarding sync", at(1, 14), 60),
-    ev("d7", "Retro", at(3, 15), 60),
-    ev("d8", "Daily standup", at(-1, 9, 30), 15),
-    ev("d9", "Architecture guild", at(-2, 13), 90, null),
-  ].sort((a, b) => a.start_ms - b.start_ms);
 }
