@@ -17,7 +17,7 @@ import {
   WorkspaceConfig,
 } from "./api";
 import { FilterTabs, padCount } from "./ui";
-import { AgentsView, useAgents } from "./Agents";
+import { AgentsView, SidebarAgents, useAgents } from "./Agents";
 import { BuilderView, useBuilder } from "./Builder";
 
 type SectionKey = "tickets" | "git" | "agents" | "builder" | "settings";
@@ -388,6 +388,16 @@ export function App(): React.JSX.Element {
               onSelect={() => handleMenuSelect("builder")}
             />
           </nav>
+
+          {!layout.sidebarCollapsed && (
+            <SidebarAgents
+              agents={agents}
+              onOpen={(id) => {
+                agents.setSelectedId(id);
+                handleMenuSelect("agents");
+              }}
+            />
+          )}
 
           <nav className="nav-card nav-card--bottom" aria-label="System">
             <NavItem

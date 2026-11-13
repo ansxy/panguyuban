@@ -20,6 +20,8 @@ export function useAgents(active: boolean) {
   const [usage, setUsage] = useState<UsageReport[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  // Lives here so the sidebar can open a session in the Agents view.
+  const [selectedId, setSelectedId] = useState("");
   const usageAt = useRef(0);
 
   async function loadSessions() {
@@ -63,7 +65,7 @@ export function useAgents(active: boolean) {
 
   const waiting = sessions.filter((s) => s.status === "waiting").length;
   const busy = sessions.filter((s) => s.status === "busy").length;
-  return { sessions, usage, error, refreshing, refresh, waiting, busy };
+  return { sessions, usage, error, refreshing, refresh, waiting, busy, selectedId, setSelectedId };
 }
 
 type AgentsState = ReturnType<typeof useAgents>;
@@ -100,9 +102,8 @@ export function AgentsView(props: {
   splitter: React.ReactNode;
   focusButton: React.ReactNode;
 }) {
-  const { sessions, usage, error } = props.agents;
+  const { sessions, usage, error, selectedId, setSelectedId } = props.agents;
   const [filter, setFilter] = useState<StatusFilter>("all");
-  const [selectedId, setSelectedId] = useState("");
   const now = useNow(5_000);
   const announcement = useWaitingAnnouncement(sessions);
 
@@ -206,6 +207,58 @@ export function AgentsView(props: {
         )}
       </section>
     </>
+  );
+}
+
+/** Sidebar "Agents" section: sessions grouped by status; click opens one in the Agents view. */
+export function SidebarAgents({ agents, onOpen }: { agents: AgentsState; onOpen: (sessionId: string) => void }) {
+  const now = useNow(5_000);
+  const groups = (["waiting", "busy", "idle"] as const)
+    .map((status) => ({
+      status,
+      sessions: agents.sessions.filter((s) => s.status === status).sort((a, b) => b.started_ms - a.started_ms),
+    }))
+    .filter((g) => g.sessions.length > 0);
+
+  return (
+    <nav className="nav-card sidebar-agents" aria-label="Agents">
+      <div className="sidebar-agents-head">
+        <span className="sidebar-title">Agents</span>
+        <button
+          type="button"
+          className="refresh-btn"
+          aria-label="Refresh agents"
+          title="Refresh agents"
+          disabled={agents.refreshing}
+          data-spinning={agents.refreshing || undefined}
+          onClick={agents.refresh}
+        >
+          ↻
+        </button>
+      </div>
+      {groups.length === 0 && <p className="nav-hint sidebar-agents-empty">No agents running</p>}
+      {groups.map((g) => (
+        <div key={g.status} className="sidebar-agents-group" data-status={g.status}>
+          <span className="sidebar-agents-label">
+            {STATUS[g.status].label} <span className="measured">{g.sessions.length}</span>
+          </span>
+          {g.sessions.map((s) => (
+            <div key={s.session_id} className="nav-item sidebar-agent" data-status={s.status}>
+              <button type="button" className="nav-item-main" title={s.cwd} onClick={() => onOpen(s.session_id)}>
+                <span className="nav-glyph" aria-hidden="true">
+                  ✦
+                </span>
+                <span className="nav-label">{s.name}</span>
+                <span className="measured">{duration(now - s.status_since_ms)}</span>
+                <span className="status-glyph" aria-hidden="true">
+                  {STATUS[s.status].glyph}
+                </span>
+              </button>
+            </div>
+          ))}
+        </div>
+      ))}
+    </nav>
   );
 }
 

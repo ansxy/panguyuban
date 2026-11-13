@@ -689,9 +689,19 @@ html[data-resizing] .workspace-grid {
 
 /* ---- Sidebar: sections on top, settings pinned to the bottom ---- */
 
+/* Sections run edge to edge, split by full-width hairlines. */
 .sidebar {
   justify-content: flex-start;
-  gap: var(--space-md);
+  gap: 0;
+  padding: 0;
+  font-size: var(--text-sm);
+  line-height: 1.35;
+}
+
+.sidebar-head,
+.nav-card {
+  padding: var(--space-sm);
+  border-bottom: var(--rule-hair) solid var(--color-rule);
 }
 
 .sidebar-head {
@@ -699,7 +709,7 @@ html[data-resizing] .workspace-grid {
   align-items: center;
   justify-content: space-between;
   gap: var(--space-xs);
-  padding-left: var(--space-xs);
+  padding-left: var(--space-md);
 }
 
 .sidebar-title {
@@ -717,8 +727,15 @@ html[data-resizing] .workspace-grid {
   gap: var(--space-2xs);
 }
 
+/* Workspace and Agents split the height evenly; each still grows to fit its content. */
+.sidebar > .nav-card:not(.nav-card--bottom) {
+  flex: 1 0 0;
+}
+
 .nav-card--bottom {
   margin-top: auto;
+  border-top: var(--rule-hair) solid var(--color-rule);
+  border-bottom: 0;
 }
 
 .nav-item {
@@ -729,13 +746,10 @@ html[data-resizing] .workspace-grid {
   transition: background-color var(--dur-micro) var(--ease-out);
 }
 
-.nav-item:hover {
-  background: var(--color-paper-3);
-}
-
+/* paper-2, not paper-3: paper-3 is the sidebar itself, so the pill was invisible. */
+.nav-item:hover,
 .nav-item[data-current] {
-  background: var(--color-paper-3);
-  box-shadow: inset 2px 0 0 var(--color-accent);
+  background: var(--color-paper-2);
 }
 
 .nav-item-main {
@@ -744,7 +758,7 @@ html[data-resizing] .workspace-grid {
   min-width: 0;
   align-items: center;
   gap: var(--space-xs);
-  padding: var(--space-xs) var(--space-sm);
+  padding: 6px var(--space-sm);
   border: 0;
   background: none;
   color: var(--color-ink-2);
@@ -762,7 +776,7 @@ html[data-resizing] .workspace-grid {
   place-items: center;
   width: 20px;
   flex-shrink: 0;
-  font-size: var(--text-md);
+  font-size: var(--text-sm);
   color: var(--color-muted);
 }
 
@@ -778,7 +792,7 @@ html[data-resizing] .workspace-grid {
 }
 
 .nav-label {
-  font-size: var(--text-sm);
+  font-size: 0.8125rem;
   font-weight: 500;
   white-space: nowrap;
   overflow: hidden;
@@ -786,7 +800,7 @@ html[data-resizing] .workspace-grid {
 }
 
 .nav-hint {
-  font-size: var(--text-xs);
+  font-size: 0.6875rem;
   color: var(--color-muted);
   white-space: nowrap;
   overflow: hidden;
@@ -798,13 +812,13 @@ html[data-resizing] .workspace-grid {
 }
 
 /* Collapsed: an icon rail; labels stay readable to screen readers. */
-.app-shell[data-sidebar-collapsed] .sidebar {
+.app-shell[data-sidebar-collapsed] .sidebar-head,
+.app-shell[data-sidebar-collapsed] .nav-card {
   padding: var(--space-sm) var(--space-2xs);
 }
 
 .app-shell[data-sidebar-collapsed] .sidebar-head {
   justify-content: center;
-  padding: 0;
 }
 
 .app-shell[data-sidebar-collapsed] .nav-item-main {
@@ -1055,7 +1069,59 @@ html[data-resizing] .workspace-grid {
   }
 }
 
+.sidebar-agents {
+  gap: var(--space-sm);
+}
+
+.sidebar-agents-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-2xs) var(--space-2xs) 0 var(--space-sm);
+}
+
+.sidebar-agents-empty {
+  padding: 0 var(--space-sm);
+}
+
+.sidebar-agents-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2xs);
+}
+
+.sidebar-agents-label {
+  padding: 0 var(--space-sm);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  color: var(--color-muted);
+}
+
+.sidebar-agents-group[data-status="waiting"] .sidebar-agents-label,
+.sidebar-agents-group[data-status="busy"] .sidebar-agents-label {
+  color: var(--color-accent);
+}
+
+.sidebar-agent .nav-glyph {
+  color: var(--color-accent);
+}
+
+.sidebar-agent .nav-label {
+  flex: 1;
+  min-width: 0;
+}
+
+.sidebar-agent[data-status="waiting"] .status-glyph {
+  color: var(--color-accent);
+}
+
+.sidebar-agent[data-status="busy"] .status-glyph {
+  color: var(--color-ok);
+  animation: agent-pulse 1.4s ease-in-out infinite;
+}
+
 @media (prefers-reduced-motion: reduce) {
+  .sidebar-agent .status-glyph,
   .status-pill--busy .status-glyph {
     animation: none;
   }
