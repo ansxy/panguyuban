@@ -21,8 +21,9 @@ import { AgentsView, SidebarAgents, useAgents } from "./Agents";
 import { BuilderView, useBuilder } from "./Builder";
 import { SidebarSpaces, TerminalStages, useSpaces } from "./Spaces";
 import { FolderPanel, PanelMode } from "./FolderPanel";
+import { OverviewView } from "./Overview";
 
-type SectionKey = "tickets" | "git" | "agents" | "builder" | "terminal" | "settings";
+type SectionKey = "overview" | "tickets" | "git" | "agents" | "builder" | "terminal" | "settings";
 type DataState = "full" | "loading" | "empty" | "error";
 
 function formatCiState(pr: PullRequest): string {
@@ -38,7 +39,7 @@ function prKey(pr: PullRequest): string {
 }
 
 export function App(): React.JSX.Element {
-  const [section, setSection] = useState<SectionKey>("terminal");
+  const [section, setSection] = useState<SectionKey>("overview");
   const [ticketView, setTicketView] = useState<TicketView>("assigned");
   const [prView, setPrView] = useState<PrView>("all");
   const [dataState, setDataState] = useState<DataState>("full");
@@ -360,6 +361,15 @@ export function App(): React.JSX.Element {
           <SidebarSpaces spaces={spaces} onOpen={openSpace} />
 
           <nav className="nav-card nav-card--views" aria-label="Views">
+            <NavItem
+              glyph="⌂"
+              label="Overview"
+              hint="What needs you"
+              current={section === "overview"}
+              collapsed={layout.sidebarCollapsed}
+              attention={agents.waiting > 0}
+              onSelect={() => handleMenuSelect("overview")}
+            />
             <NavItem
               glyph="◫"
               label="Tickets"
@@ -962,6 +972,30 @@ export function App(): React.JSX.Element {
               className={builder.project ? "main-stage main-stage--builder" : "main-stage main-stage--single"}
             >
               <BuilderView builder={builder} />
+            </main>
+          )}
+
+          {dataState === "full" && section === "overview" && (
+            <main className="main-stage main-stage--single">
+              <OverviewView
+                myActiveTickets={assignedTickets.filter((t) => t.state === "InProgress" || t.state === "InReview")}
+                reviewPrs={reviewPrs}
+                mergePrs={mergePrs}
+                agents={agents.sessions}
+                onOpenTicket={(key) => {
+                  setTicketView("assigned");
+                  setSelectedTicketKey(key);
+                  handleMenuSelect("tickets");
+                }}
+                onOpenPr={(pr, view) => {
+                  setSelectedPrKey(prKey(pr));
+                  handleMenuSelect("git", view);
+                }}
+                onOpenAgent={(id) => {
+                  agents.setSelectedId(id);
+                  handleMenuSelect("agents");
+                }}
+              />
             </main>
           )}
 
