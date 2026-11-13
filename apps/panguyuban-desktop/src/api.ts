@@ -304,12 +304,13 @@ export async function mergePrAndCloseTicket(
 export async function saveWorkspaceConfig(
   config: WorkspaceConfig,
   planeToken?: string,
-  githubToken?: string
+  githubToken?: string,
+  calendarUrl?: string
 ): Promise<WorkspaceConfig> {
   if (window.__TAURI_INTERNALS__?.invoke) {
     return window.__TAURI_INTERNALS__.invoke<WorkspaceConfig>(
       "save_workspace_config",
-      { config, planeToken, githubToken }
+      { config, planeToken, githubToken, calendarUrl }
     );
   }
   fallbackState.config = structuredClone(config);
@@ -638,12 +639,21 @@ export interface CalendarEvent {
   join_url: string | null;
 }
 
-/** Meetings overlapping [fromMs, toMs) from the Mac's Calendar app, sorted by start. */
+/** Meetings overlapping [fromMs, toMs) from the Mac's Calendar app and any ICS link
+ * or imported .ics file, sorted by start. */
 export async function calendarEvents(fromMs: number, toMs: number): Promise<CalendarEvent[]> {
   if (window.__TAURI_INTERNALS__?.invoke) {
     return window.__TAURI_INTERNALS__.invoke<CalendarEvent[]>("calendar_events", { fromMs, toMs });
   }
   return demoEvents().filter((e) => e.end_ms > fromMs && e.start_ms < toMs);
+}
+
+/** Keeps a copy of an .ics file's text as the imported calendar; returns how many events it has. */
+export async function importCalendar(ics: string): Promise<number> {
+  if (window.__TAURI_INTERNALS__?.invoke) {
+    return window.__TAURI_INTERNALS__.invoke<number>("import_calendar", { ics });
+  }
+  return (ics.match(/^BEGIN:VEVENT/gm) ?? []).length;
 }
 
 export async function openMeeting(url: string): Promise<void> {

@@ -5,6 +5,7 @@ import {
   getDashboardState,
   getPlaneAssetUrl,
   getPrDiff,
+  importCalendar,
   listPlaneProjects,
   mergePrAndCloseTicket,
   PlaneProject,
@@ -74,6 +75,7 @@ export function App(): React.JSX.Element {
   const [planeProjects, setPlaneProjects] = useState<PlaneProject[]>([]);
   const [githubRepo, setGithubRepo] = useState<string>("");
   const [githubToken, setGithubToken] = useState<string>("");
+  const [calendarUrl, setCalendarUrl] = useState<string>("");
   const [localRepoPath, setLocalRepoPath] = useState<string>(".");
 
   function applyDashboard(payload: DashboardPayload): void {
@@ -288,6 +290,16 @@ export function App(): React.JSX.Element {
     }
   }, [section]);
 
+  async function handleImportCalendar(file: File | undefined): Promise<void> {
+    if (!file) return;
+    try {
+      const count = await importCalendar(await file.text());
+      setSettingsStatus(`Imported ${count} events from ${file.name}`);
+    } catch (err) {
+      setSettingsStatus(`Calendar: ${String(err)}`);
+    }
+  }
+
   async function handleSaveSettings(): Promise<void> {
     const baseConfig: WorkspaceConfig = dashboard?.config ?? {
       issue_provider: "plane.so",
@@ -309,13 +321,15 @@ export function App(): React.JSX.Element {
         local_repo_path: localRepoPath,
       },
       planeToken || undefined,
-      githubToken || undefined
+      githubToken || undefined,
+      calendarUrl || undefined
     );
     if (dashboard) {
       setDashboard({ ...dashboard, config: updatedConfig });
     }
     setPlaneToken("");
     setGithubToken("");
+    setCalendarUrl("");
     setSettingsStatus("Saved provider settings to SQLite and keychain");
   }
 
@@ -1184,6 +1198,57 @@ export function App(): React.JSX.Element {
                         <span className="field-help">
                           Optional. Falls back to the GitHub CLI login (gh auth
                           login) when no token is saved.
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="inspector-card">
+                    <div className="inspector-section">
+                      <div className="record-top">
+                        <h2>Calendar</h2>
+                      </div>
+                      <p className="lead">
+                        On a Mac, calendars in the Calendar app show up on their
+                        own. Add a link or file for any others.
+                      </p>
+                    </div>
+                    <div className="inspector-section">
+                      <div className="field-group">
+                        <label className="field-label" htmlFor="calendar-url">
+                          Calendar link (iCal / ICS)
+                        </label>
+                        <input
+                          id="calendar-url"
+                          name="calendar-url"
+                          type="password"
+                          autoComplete="off"
+                          className="input-field"
+                          placeholder="https://calendar.google.com/calendar/ical/…/basic.ics"
+                          value={calendarUrl}
+                          onChange={(e) => setCalendarUrl(e.target.value)}
+                        />
+                        <span className="field-help">
+                          Google Calendar: Settings, your calendar, Secret address
+                          in iCal format. Outlook: Publish calendar, ICS link.
+                          Anyone with the link can read the calendar, so it is
+                          kept in the OS keychain.
+                        </span>
+                      </div>
+                      <div className="field-group">
+                        <label className="field-label" htmlFor="calendar-file">
+                          Or import an .ics file
+                        </label>
+                        <input
+                          id="calendar-file"
+                          name="calendar-file"
+                          type="file"
+                          accept=".ics,text/calendar"
+                          className="input-field"
+                          onChange={(e) => void handleImportCalendar(e.target.files?.[0])}
+                        />
+                        <span className="field-help">
+                          A snapshot: import again to pick up changes.
                         </span>
                       </div>
                     </div>

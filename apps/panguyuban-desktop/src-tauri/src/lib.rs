@@ -520,6 +520,7 @@ impl DesktopController {
         config: WorkspaceConfig,
         plane_token: Option<String>,
         github_token: Option<String>,
+        calendar_url: Option<String>,
     ) -> Result<WorkspaceConfig, CoreError> {
         self.store.save_config(&config)?;
         if let Some(secrets) = &self.secrets {
@@ -533,8 +534,21 @@ impl DesktopController {
                     secrets.set_secret("github_pat", token.trim())?;
                 }
             }
+            if let Some(url) = calendar_url {
+                if !url.trim().is_empty() {
+                    secrets.set_secret("calendar_ics_url", url.trim())?;
+                }
+            }
         }
         self.store.get_config()
+    }
+
+    /// The saved iCal link, if any. Kept in the keychain: anyone with it can read the calendar.
+    pub fn calendar_url(&self) -> Option<String> {
+        self.secrets
+            .as_ref()
+            .and_then(|s| s.get_secret("calendar_ics_url").ok().flatten())
+            .filter(|u| !u.is_empty())
     }
 }
 
@@ -684,12 +698,19 @@ async fn open_agent_folder(cwd: String) -> Result<(), String> {
         .map_err(|e| e.to_string())?
 }
 
-/// Meetings between two instants, from the Mac's Calendar app.
+/// Meetings between two instants, from the Mac's Calendar app, the iCal link and the imported file.
 #[tauri::command]
-async fn calendar_events(from_ms: i64, to_ms: i64) -> Result<Vec<calendar::CalendarEvent>, String> {
-    tokio::task::spawn_blocking(move || calendar::events(from_ms, to_ms))
-        .await
-        .map_err(|e| e.to_string())?
+async fn calendar_events(
+    state: tauri::State<'_, DesktopController>,
+    from_ms: i64,
+    to_ms: i64,
+) -> Result<Vec<calendar::CalendarEvent>, String> {
+    calendar::events(state.calendar_url(), from_ms, to_ms).await
+}
+
+#[tauri::command]
+fn import_calendar(ics: String) -> Result<usize, String> {
+    calendar::import(&ics)
 }
 
 #[tauri::command]
@@ -818,9 +839,10 @@ fn save_workspace_config(
     config: WorkspaceConfig,
     plane_token: Option<String>,
     github_token: Option<String>,
+    calendar_url: Option<String>,
 ) -> Result<WorkspaceConfig, String> {
     state
-        .save_config(config, plane_token, github_token)
+        .save_config(config, plane_token, github_token, calendar_url)
         .map_err(|e| e.to_string())
 }
 
@@ -850,6 +872,7 @@ pub fn run() {
             reveal_agent,
             open_agent_folder,
             calendar_events,
+            import_calendar,
             open_meeting,
             builder_agents,
             builder_interview_turn,
@@ -1024,7 +1047,7 @@ mod tests {
 
         let mut cfg = WorkspaceConfig::default();
         cfg.plane_workspace_slug = "team-panguyuban".into();
-        let saved = state.save_config(cfg, None, None).unwrap();
+        let saved = state.save_config(cfg, None, None, None).unwrap();
         assert_eq!(saved.plane_workspace_slug, "team-panguyuban");
     }
 }
