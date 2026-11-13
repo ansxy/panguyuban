@@ -16,8 +16,9 @@ Built with Tauri 2 (Rust) and React.
 | **Agents** | Live Claude Code and Antigravity sessions on this Mac: who is working, who needs you, token usage. |
 | **Prototypes** | Guided builder: an agent interviews you, writes a PRD, builds an HTML prototype, then hands it to engineering or builds it. |
 
-Meetings come from the macOS **Calendar** app, so any account it syncs (Google
-Workspace, Exchange, iCloud) shows up. Recurring meetings included.
+Meetings come from the macOS **Calendar** app (any account it syncs: Google Workspace,
+Exchange, iCloud) and, on any system, from a calendar's private **iCal link** or an
+imported **.ics file**. Recurring meetings included.
 
 ## Platform support
 
@@ -27,7 +28,7 @@ Windows too, but those are not tested yet, and a few parts are macOS-only today:
 | | macOS | Linux | Windows |
 |---|---|---|---|
 | Tested | yes | not yet | not yet |
-| Meetings and calendar | macOS 14 or newer | no (reads the macOS Calendar app) | no |
+| Meetings and calendar | Calendar app (macOS 14+), iCal link, .ics file | iCal link, .ics file | iCal link, .ics file |
 | Tokens kept between launches | Keychain | not yet (no Linux keyring enabled) | Credential Manager |
 | Terminals | yes | yes | not yet (expects a Unix shell) |
 | Installable app bundle | `Panguyuban.app` | run from source | run from source (needs an `.ico` icon first) |
@@ -44,7 +45,9 @@ Windows too, but those are not tested yet, and a few parts are macOS-only today:
 - Optional, for each feature:
   - **GitHub:** the [`gh` CLI](https://cli.github.com), signed in with `gh auth login`, or a personal access token in Settings
   - **Plane:** a Plane API token (Plane → Profile settings → Personal access tokens)
-  - **Meetings (macOS):** your work calendar added to the Calendar app (System Settings → Internet Accounts)
+  - **Meetings:** your calendar's private iCal link (Google Calendar: Settings → your calendar →
+    Secret address in iCal format; Outlook: Publish calendar → ICS link), or on macOS your
+    work calendar added to the Calendar app (System Settings → Internet Accounts)
   - **Agents / Prototypes:** [Claude Code](https://claude.com/claude-code) (`claude`) or Antigravity (`agy`) on your `PATH`
 
 ## Install
@@ -77,15 +80,18 @@ The first build compiles all the Rust dependencies and takes a few minutes.
    optionally a GitHub repo (`owner/repo`; leave it empty to see all your PRs) and your
    local repo path. Tokens go into the system keychain, never into files.
 2. **GitHub:** if `gh auth login` is done, nothing else is needed.
-3. **Calendar (macOS):** the first time the Overview opens, macOS asks for Calendar access.
-   Allow it. If you said no, turn it back on in System Settings → Privacy & Security → Calendars.
+3. **Calendar:** paste your calendar's iCal link in Settings → Calendar, or import an `.ics`
+   file there (a snapshot: import again to pick up changes). On macOS the Calendar app is
+   read too: the first time the Overview opens, macOS asks for Calendar access. Allow it, or
+   turn it back on later in System Settings → Privacy & Security → Calendars.
 
 ### Where things are stored
 
 - Settings and synced tickets / PRs: `state.db` in the `panguyuban` folder of your local
   app data (macOS `~/Library/Application Support`, Linux `~/.local/share`,
   Windows `%LOCALAPPDATA%`)
-- Tokens: the system keychain, service `com.ansar.panguyuban`
+- Tokens and the iCal link: the system keychain, service `com.ansar.panguyuban`
+- An imported `.ics` file: a copy next to `state.db`
 - Prototypes and their PRDs: `Panguyuban` in your Documents folder
 - Window layout and per-ticket project picks: the app's local storage
 
@@ -121,7 +127,7 @@ Install the Panguyuban desktop app on this computer.
    `agy` on the PATH (Agents and Prototypes).
 7. Finish with a short summary: what you installed, how to start the app, and
    what I still have to do myself (Plane token in Settings, `gh auth login`,
-   allowing Calendar access on macOS).
+   the calendar's iCal link in Settings, allowing Calendar access on macOS).
 
 Never type, paste or store a token or password for me; I enter those in the
 app's Settings. Do not change system settings.
