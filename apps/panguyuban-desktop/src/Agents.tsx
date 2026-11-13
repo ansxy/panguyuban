@@ -4,18 +4,19 @@ import {
   AgentStatus,
   agentSessions,
   agentUsage,
+  killAgent,
   openAgentFolder,
   revealAgent,
   TokenWindow,
   UsageReport,
 } from "./api";
-import { FilterTabs } from "./ui";
+import { FilterTabs, Icon } from "./ui";
 
 const SESSION_POLL_MS = 3_000;
 const USAGE_POLL_MS = 45_000;
 
 /** Live agent sessions (polled while the window is visible) and usage (polled while shown). */
-export function useAgents(active: boolean) {
+export function useAgents(active: boolean, enabled = true) {
   const [sessions, setSessions] = useState<AgentSession[]>([]);
   const [usage, setUsage] = useState<UsageReport[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -43,19 +44,23 @@ export function useAgents(active: boolean) {
   }
 
   useEffect(() => {
+    if (!enabled) {
+      setSessions([]);
+      return;
+    }
     void loadSessions();
     const timer = setInterval(() => {
       if (document.visibilityState === "visible") void loadSessions();
     }, SESSION_POLL_MS);
     return () => clearInterval(timer);
-  }, []);
+  }, [enabled]);
 
   useEffect(() => {
-    if (!active) return;
+    if (!active || !enabled) return;
     if (Date.now() - usageAt.current > 15_000) void loadUsage();
     const timer = setInterval(loadUsage, USAGE_POLL_MS);
     return () => clearInterval(timer);
-  }, [active]);
+  }, [active, enabled]);
 
   async function refresh() {
     setRefreshing(true);
@@ -198,7 +203,7 @@ export function AgentsView(props: {
 
       <section className="pane pane--detail" aria-label="Selected agent session">
         {active ? (
-          <AgentDetail session={active} now={now} focusButton={props.focusButton} />
+          <AgentDetail key={active.session_id} session={active} now={now} focusButton={props.focusButton} onEnded={props.agents.refresh} />
         ) : (
           <div className="pane-header">
             <h2>No session selected</h2>
@@ -233,7 +238,7 @@ export function SidebarAgents({ agents, onOpen }: { agents: AgentsState; onOpen:
           data-spinning={agents.refreshing || undefined}
           onClick={agents.refresh}
         >
-          ↻
+          <Icon name="refresh" size={14} />
         </button>
       </div>
       {groups.length === 0 && <p className="nav-hint sidebar-agents-empty">No agents running</p>}
@@ -245,8 +250,8 @@ export function SidebarAgents({ agents, onOpen }: { agents: AgentsState; onOpen:
           {g.sessions.map((s) => (
             <div key={s.session_id} className="nav-item sidebar-agent" data-status={s.status}>
               <button type="button" className="nav-item-main" title={s.cwd} onClick={() => onOpen(s.session_id)}>
-                <span className="nav-glyph" aria-hidden="true">
-                  ✦
+                <span className="nav-glyph">
+                  <Icon name="agents" />
                 </span>
                 <span className="nav-label">{s.name}</span>
                 <span className="measured">{duration(now - s.status_since_ms)}</span>
@@ -266,12 +271,16 @@ function AgentDetail({
   session: s,
   now,
   focusButton,
+  onEnded,
 }: {
   session: AgentSession;
   now: number;
   focusButton: React.ReactNode;
+  onEnded: () => void;
 }) {
   const [note, setNote] = useState("");
+  // Ending a session cannot be undone, so it takes a second click.
+  const [confirmEnd, setConfirmEnd] = useState(false);
   const resume = `cd ${quote(s.cwd)} && claude --resume ${s.session_id}`;
 
   async function run(label: string, action: () => Promise<void>) {
@@ -374,6 +383,27 @@ function AgentDetail({
               onClick={() => run("Copied resume command", () => navigator.clipboard.writeText(resume))}
             >
               Copy resume command
+            </button>
+          )}
+          {confirmEnd ? (
+            <>
+              <button
+                type="button"
+                className="btn btn--danger"
+                onClick={() => {
+                  setConfirmEnd(false);
+                  run("Session ended", () => killAgent(s.pid).then(onEnded));
+                }}
+              >
+                Confirm: end {s.name}
+              </button>
+              <button type="button" className="btn" onClick={() => setConfirmEnd(false)}>
+                Cancel
+              </button>
+            </>
+          ) : (
+            <button type="button" className="btn" onClick={() => setConfirmEnd(true)}>
+              End session
             </button>
           )}
         </div>

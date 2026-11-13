@@ -1,6 +1,7 @@
 mod agents;
 mod builder;
 mod calendar;
+mod http;
 mod spaces;
 mod terminal;
 
@@ -106,7 +107,6 @@ impl DesktopController {
             issue_provider: None,
             git_provider: None,
         };
-        controller.seed_initial_records_if_empty()?;
         Ok(controller)
     }
 
@@ -121,7 +121,6 @@ impl DesktopController {
             issue_provider: Some(issue_provider),
             git_provider: Some(git_provider),
         };
-        controller.seed_initial_records_if_empty()?;
         Ok(controller)
     }
 
@@ -131,139 +130,12 @@ impl DesktopController {
             .join("panguyuban")
             .join("state.db");
         let store = SqliteStore::open_path(&db_path)?;
-        // No sample seeding here: an empty sync result must stay empty, not come
-        // back as fake PRs/tickets on the next launch. Samples are demo-only.
         Ok(Self {
             store,
             secrets: Some(Arc::new(KeyringSecretStore::new("com.ansar.panguyuban"))),
             issue_provider: None,
             git_provider: None,
         })
-    }
-
-    fn seed_initial_records_if_empty(&self) -> Result<(), CoreError> {
-        if self.store.list_cached_tickets()?.is_empty() {
-            let sample_tickets = vec![
-                Ticket {
-                    id: "b62f8d9a-0142".into(),
-                    key: "PAN-142".into(),
-                    title: "Fix JWT refresh race on concurrent requests".into(),
-                    description: "When two requests expire within the same millisecond, parallel refresh calls invalidate the first rotated token. Guard rotation with an async mutex inside the session store.".into(),
-                    state: TicketState::InReview,
-                    assignee: Some("@ansar".into()),
-                    priority: Some("high".into()),
-                    updated_at: "2026-11-11T02:14:09Z".into(),
-                    url: "https://app.plane.so/panguyuban/issues/PAN-142".into(),
-                    assigned_to_me: true,
-                },
-                Ticket {
-                    id: "b62f8d9a-0145".into(),
-                    key: "PAN-145".into(),
-                    title: "Add exponential backoff to webhook delivery".into(),
-                    description: "Failed webhook deliveries currently retry immediately and trip downstream rate limits. Schedule retries with jitter over 5 attempts.".into(),
-                    state: TicketState::InProgress,
-                    assignee: Some("@alex".into()),
-                    priority: Some("medium".into()),
-                    updated_at: "2026-11-11T02:20:00Z".into(),
-                    url: "https://app.plane.so/panguyuban/issues/PAN-145".into(),
-                    assigned_to_me: false,
-                },
-                Ticket {
-                    id: "b62f8d9a-0149".into(),
-                    key: "PAN-149".into(),
-                    title: "Expose rate-limit headers on public endpoints".into(),
-                    description: "Return X-RateLimit-Limit, X-RateLimit-Remaining, and X-RateLimit-Reset on all authenticated API routes.".into(),
-                    state: TicketState::Todo,
-                    assignee: Some("@ansar".into()),
-                    priority: Some("low".into()),
-                    updated_at: "2026-11-11T02:30:00Z".into(),
-                    url: "https://app.plane.so/panguyuban/issues/PAN-149".into(),
-                    assigned_to_me: true,
-                },
-            ];
-            self.store.upsert_tickets(&sample_tickets)?;
-        }
-
-        if self.store.list_cached_pull_requests()?.is_empty() {
-            let sample_prs = vec![
-                PullRequest {
-                    repo: "ansar/panguyuban".into(),
-                    review_requested: false,
-                    number: 89,
-                    title: "fix(auth): serialize token refresh with mutex".into(),
-                    author: "@ansar".into(),
-                    source_branch: "fix/pan-142-jwt".into(),
-                    target_branch: "main".into(),
-                    mergeable: true,
-                    additions: 84,
-                    deletions: 19,
-                    review_state: ReviewState::Approved,
-                    ci_state: CiState::Passing {
-                        passed: 3,
-                        total: 3,
-                    },
-                    linked_ticket_key: Some("PAN-142".into()),
-                    diff_preview: vec![
-                        "@@ -42,7 +42,9 @@ impl TokenManager {".into(),
-                        "-    let next = self.client.refresh(&current).await?;".into(),
-                        "+    let _guard = self.refresh_lock.lock().await;".into(),
-                        "+    let next = self.client.refresh(&current).await?;".into(),
-                    ],
-                    url: "https://github.com/ansar/panguyuban/pull/89".into(),
-                },
-                PullRequest {
-                    repo: "ansar/panguyuban".into(),
-                    review_requested: true,
-                    number: 92,
-                    title: "feat(webhook): bounded retry queue with jitter".into(),
-                    author: "@alex".into(),
-                    source_branch: "feat/pan-145-webhook".into(),
-                    target_branch: "main".into(),
-                    mergeable: true,
-                    additions: 142,
-                    deletions: 11,
-                    review_state: ReviewState::ReviewRequired,
-                    ci_state: CiState::Passing {
-                        passed: 2,
-                        total: 3,
-                    },
-                    linked_ticket_key: Some("PAN-145".into()),
-                    diff_preview: vec![
-                        "@@ -18,4 +18,8 @@ pub fn next_backoff(attempt: u32) -> Duration {".into(),
-                        "+    let base = 2_u64.saturating_pow(attempt);".into(),
-                        "+    Duration::from_secs(base.min(300))".into(),
-                    ],
-                    url: "https://github.com/ansar/panguyuban/pull/92".into(),
-                },
-                PullRequest {
-                    repo: "ansar/infra".into(),
-                    review_requested: true,
-                    number: 94,
-                    title: "chore(cargo): bump tokio and reqwest crates".into(),
-                    author: "@sarah".into(),
-                    source_branch: "chore/tokio-bump".into(),
-                    target_branch: "main".into(),
-                    mergeable: true,
-                    additions: 18,
-                    deletions: 18,
-                    review_state: ReviewState::ReviewRequired,
-                    ci_state: CiState::Passing {
-                        passed: 3,
-                        total: 3,
-                    },
-                    linked_ticket_key: None,
-                    diff_preview: vec![
-                        "@@ -12,2 +12,2 @@ [dependencies]".into(),
-                        "-tokio = \"1.39\"".into(),
-                        "+tokio = \"1.54\"".into(),
-                    ],
-                    url: "https://github.com/ansar/panguyuban/pull/94".into(),
-                },
-            ];
-            self.store.upsert_pull_requests(&sample_prs)?;
-        }
-
-        Ok(())
     }
 
     pub fn get_dashboard_payload(&self) -> Result<DashboardPayload, CoreError> {
@@ -677,6 +549,15 @@ async fn reveal_agent(pid: i32, cwd: String) -> Result<(), String> {
         .map_err(|e| e.to_string())?
 }
 
+/// Ends a tracked agent session's process.
+#[tauri::command]
+async fn kill_agent(tracker: tauri::State<'_, Tracker>, pid: i32) -> Result<(), String> {
+    let tracker = tracker.inner().clone();
+    tokio::task::spawn_blocking(move || tracker.kill(pid))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 async fn open_agent_folder(cwd: String) -> Result<(), String> {
     tokio::task::spawn_blocking(move || agents::open_folder(&cwd, false))
@@ -786,6 +667,11 @@ async fn space_status(paths: Vec<String>) -> Result<Vec<spaces::SpaceStatus>, St
 }
 
 #[tauri::command]
+async fn send_http(request: http::HttpRequest) -> Result<http::HttpResponse, String> {
+    http::send(request).await
+}
+
+#[tauri::command]
 async fn folder_list(path: String) -> Result<Vec<spaces::DirEntry>, String> {
     tokio::task::spawn_blocking(move || spaces::list_dir(&path))
         .await
@@ -848,6 +734,7 @@ pub fn run() {
             agent_sessions,
             agent_usage,
             reveal_agent,
+            kill_agent,
             open_agent_folder,
             calendar_events,
             open_meeting,
@@ -866,6 +753,7 @@ pub fn run() {
             folder_list,
             folder_read_file,
             folder_changes,
+            send_http,
             save_workspace_config
         ])
         .run(tauri::generate_context!())
@@ -979,6 +867,131 @@ mod tests {
         }
     }
 
+    fn seed_fixtures(controller: &DesktopController) -> Result<(), CoreError> {
+        if controller.store.list_cached_tickets()?.is_empty() {
+            let sample_tickets = vec![
+                Ticket {
+                    id: "b62f8d9a-0142".into(),
+                    key: "PAN-142".into(),
+                    title: "Fix JWT refresh race on concurrent requests".into(),
+                    description: "When two requests expire within the same millisecond, parallel refresh calls invalidate the first rotated token. Guard rotation with an async mutex inside the session store.".into(),
+                    state: TicketState::InReview,
+                    assignee: Some("@ansar".into()),
+                    priority: Some("high".into()),
+                    updated_at: "2026-11-11T02:14:09Z".into(),
+                    url: "https://app.plane.so/panguyuban/issues/PAN-142".into(),
+                    assigned_to_me: true,
+                },
+                Ticket {
+                    id: "b62f8d9a-0145".into(),
+                    key: "PAN-145".into(),
+                    title: "Add exponential backoff to webhook delivery".into(),
+                    description: "Failed webhook deliveries currently retry immediately and trip downstream rate limits. Schedule retries with jitter over 5 attempts.".into(),
+                    state: TicketState::InProgress,
+                    assignee: Some("@alex".into()),
+                    priority: Some("medium".into()),
+                    updated_at: "2026-11-11T02:20:00Z".into(),
+                    url: "https://app.plane.so/panguyuban/issues/PAN-145".into(),
+                    assigned_to_me: false,
+                },
+                Ticket {
+                    id: "b62f8d9a-0149".into(),
+                    key: "PAN-149".into(),
+                    title: "Expose rate-limit headers on public endpoints".into(),
+                    description: "Return X-RateLimit-Limit, X-RateLimit-Remaining, and X-RateLimit-Reset on all authenticated API routes.".into(),
+                    state: TicketState::Todo,
+                    assignee: Some("@ansar".into()),
+                    priority: Some("low".into()),
+                    updated_at: "2026-11-11T02:30:00Z".into(),
+                    url: "https://app.plane.so/panguyuban/issues/PAN-149".into(),
+                    assigned_to_me: true,
+                },
+            ];
+            controller.store.upsert_tickets(&sample_tickets)?;
+        }
+
+        if controller.store.list_cached_pull_requests()?.is_empty() {
+            let sample_prs = vec![
+                PullRequest {
+                    repo: "ansar/panguyuban".into(),
+                    review_requested: false,
+                    number: 89,
+                    title: "fix(auth): serialize token refresh with mutex".into(),
+                    author: "@ansar".into(),
+                    source_branch: "fix/pan-142-jwt".into(),
+                    target_branch: "main".into(),
+                    mergeable: true,
+                    additions: 84,
+                    deletions: 19,
+                    review_state: ReviewState::Approved,
+                    ci_state: CiState::Passing {
+                        passed: 3,
+                        total: 3,
+                    },
+                    linked_ticket_key: Some("PAN-142".into()),
+                    diff_preview: vec![
+                        "@@ -42,7 +42,9 @@ impl TokenManager {".into(),
+                        "-    let next = self.client.refresh(&current).await?;".into(),
+                        "+    let _guard = self.refresh_lock.lock().await;".into(),
+                        "+    let next = self.client.refresh(&current).await?;".into(),
+                    ],
+                    url: "https://github.com/ansar/panguyuban/pull/89".into(),
+                },
+                PullRequest {
+                    repo: "ansar/panguyuban".into(),
+                    review_requested: true,
+                    number: 92,
+                    title: "feat(webhook): bounded retry queue with jitter".into(),
+                    author: "@alex".into(),
+                    source_branch: "feat/pan-145-webhook".into(),
+                    target_branch: "main".into(),
+                    mergeable: true,
+                    additions: 142,
+                    deletions: 11,
+                    review_state: ReviewState::ReviewRequired,
+                    ci_state: CiState::Passing {
+                        passed: 2,
+                        total: 3,
+                    },
+                    linked_ticket_key: Some("PAN-145".into()),
+                    diff_preview: vec![
+                        "@@ -18,4 +18,8 @@ pub fn next_backoff(attempt: u32) -> Duration {".into(),
+                        "+    let base = 2_u64.saturating_pow(attempt);".into(),
+                        "+    Duration::from_secs(base.min(300))".into(),
+                    ],
+                    url: "https://github.com/ansar/panguyuban/pull/92".into(),
+                },
+                PullRequest {
+                    repo: "ansar/infra".into(),
+                    review_requested: true,
+                    number: 94,
+                    title: "chore(cargo): bump tokio and reqwest crates".into(),
+                    author: "@sarah".into(),
+                    source_branch: "chore/tokio-bump".into(),
+                    target_branch: "main".into(),
+                    mergeable: true,
+                    additions: 18,
+                    deletions: 18,
+                    review_state: ReviewState::ReviewRequired,
+                    ci_state: CiState::Passing {
+                        passed: 3,
+                        total: 3,
+                    },
+                    linked_ticket_key: None,
+                    diff_preview: vec![
+                        "@@ -12,2 +12,2 @@ [dependencies]".into(),
+                        "-tokio = \"1.39\"".into(),
+                        "+tokio = \"1.54\"".into(),
+                    ],
+                    url: "https://github.com/ansar/panguyuban/pull/94".into(),
+                },
+            ];
+            controller.store.upsert_pull_requests(&sample_prs)?;
+        }
+
+        Ok(())
+    }
+
     #[tokio::test]
     async fn delegates_workflow_actions_to_injected_providers_and_updates_sqlite() {
         let issue_prov = Arc::new(RecordingIssueProvider {
@@ -994,6 +1007,7 @@ mod tests {
             git_prov.clone(),
         )
         .unwrap();
+        seed_fixtures(&state).unwrap();
 
         let initial = state.get_dashboard_payload().unwrap();
         assert_eq!(initial.tickets.len(), 3);

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { DirEntry, folderChanges, folderList, folderReadFile } from "./api";
-import { DiffFiles } from "./ui";
+import { DiffFiles, Icon } from "./ui";
 
 export type PanelMode = "files" | "changes";
 
@@ -25,7 +25,7 @@ export function FolderPanel(props: { mode: PanelMode; cwd: string; onClose: () =
           title="Refresh"
           onClick={() => setNonce((n) => n + 1)}
         >
-          ↻
+          <Icon name="refresh" size={14} />
         </button>
         <button type="button" className="refresh-btn" aria-label={`Close ${title}`} title="Close" onClick={props.onClose}>
           ×

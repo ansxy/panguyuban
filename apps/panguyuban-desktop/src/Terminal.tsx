@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
+import { tokenColor } from "./theme";
 import { TermInfo, termClose, termInfo, termOpen, termRead, termResize, termWrite } from "./api";
 
 const INFO_POLL_MS = 1_500;
@@ -32,13 +33,20 @@ export function TerminalView(props: {
 
   useEffect(() => {
     const host = hostRef.current!;
-    // ponytail: hex approximations of the paper/ink/accent tokens; xterm wants plain colors.
+    const theme = () => ({
+      background: tokenColor("--color-paper-3"),
+      foreground: tokenColor("--color-ink"),
+      cursor: tokenColor("--color-accent"),
+      selectionBackground: tokenColor("--color-accent-soft"),
+    });
     const term = new Terminal({
       fontFamily: 'ui-monospace, "SF Mono", Menlo, monospace',
       fontSize: 13,
       cursorBlink: true,
-      theme: { background: "#15181c", foreground: "#eef0f3", cursor: "#f2bf4a", selectionBackground: "#4a4334" },
+      theme: theme(),
     });
+    const onTheme = () => (term.options.theme = theme());
+    window.addEventListener("panguyuban:theme", onTheme);
     const fit = new FitAddon();
     term.loadAddon(fit);
     term.open(host);
@@ -81,6 +89,7 @@ export function TerminalView(props: {
 
     return () => {
       disposed = true;
+      window.removeEventListener("panguyuban:theme", onTheme);
       observer.disconnect();
       input.dispose();
       resize.dispose();

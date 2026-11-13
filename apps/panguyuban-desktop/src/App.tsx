@@ -16,14 +16,17 @@ import {
   Ticket,
   WorkspaceConfig,
 } from "./api";
-import { DiffFiles, FilterTabs, padCount } from "./ui";
+import { DiffFiles, FilterTabs, Icon, type IconName } from "./ui";
 import { AgentsView, shortPath, SidebarAgents, useAgents } from "./Agents";
 import { BuilderView, useBuilder } from "./Builder";
+import { FEATURES, type FeatureKey, useFeatures } from "./features";
 import { SidebarSpaces, TerminalStages, useSpaces } from "./Spaces";
 import { FolderPanel, PanelMode } from "./FolderPanel";
+import { RequestsView, useRequests } from "./Requests";
 import { OverviewView } from "./Overview";
+import { THEMES, applyTheme, savedTheme } from "./theme";
 
-type SectionKey = "overview" | "tickets" | "git" | "agents" | "builder" | "terminal" | "settings";
+type SectionKey = "overview" | "tickets" | "git" | "agents" | "builder" | "requests" | "terminal" | "settings";
 type DataState = "full" | "loading" | "empty" | "error";
 
 function formatCiState(pr: PullRequest): string {
@@ -32,6 +35,20 @@ function formatCiState(pr: PullRequest): string {
     return `${pr.ci_state.Passing.passed} / ${pr.ci_state.Passing.total} pass`;
   }
   return `${pr.ci_state.Failing.failed} / ${pr.ci_state.Failing.total} fail`;
+}
+
+/** "InProgress" -> "In progress", for states printed as the API stores them. */
+function humanize(value: string): string {
+  const spaced = value.replace(/([a-z])([A-Z])/g, "$1 $2").toLowerCase();
+  return spaced.charAt(0).toUpperCase() + spaced.slice(1);
+}
+
+/** Chip colour by what the state means, so the list can be scanned. */
+function stateChip(state: string): string {
+  if (state === "Approved" || state === "Done") return "chip chip--ok";
+  if (state === "ChangesRequested" || state === "Cancelled") return "chip chip--bad";
+  if (state === "InProgress" || state === "InReview") return "chip chip--instrument";
+  return "chip";
 }
 
 function prKey(pr: PullRequest): string {
@@ -44,29 +61,45 @@ export function App(): React.JSX.Element {
   const [prView, setPrView] = useState<PrView>("all");
   const [dataState, setDataState] = useState<DataState>("full");
   const [dashboard, setDashboard] = useState<DashboardPayload | null>(null);
-  const [selectedTicketKey, setSelectedTicketKey] = useState<string>("PAN-142");
+  const [selectedTicketKey, setSelectedTicketKey] = useState<string>("");
   const [selectedPrKey, setSelectedPrKey] = useState<string>("");
   const [ticketFilter, setTicketFilter] = useState<string>("");
   const [prFilter, setPrFilter] = useState<string>("");
-  const [actionStatus, setActionStatus] = useState<string>("Ready on GitHub");
-  const [settingsStatus, setSettingsStatus] = useState<string>(
-    "SQLite config ready"
-  );
+  const [actionStatus, setActionStatus] = useState<string>("");
+  const [settingsStatus, setSettingsStatus] = useState<string>("");
+  const [syncError, setSyncError] = useState<string>("");
+  // One ticket/PR action at a time; the buttons disable while it runs.
+  const [busy, setBusy] = useState(false);
+  const [theme, setTheme] = useState(savedTheme());
+  // PR key awaiting a second click on merge (it cannot be undone).
+  const [confirmMergeKey, setConfirmMergeKey] = useState<string>("");
 
   const [planeBaseUrl, setPlaneBaseUrl] = useState<string>(
     "https://api.plane.so"
   );
-  const [planeWorkspaceSlug, setPlaneWorkspaceSlug] =
-    useState<string>("panguyuban");
-  const [planeProjectId, setPlaneProjectId] =
-    useState<string>("panguyuban-core");
+  const [planeWorkspaceSlug, setPlaneWorkspaceSlug] = useState<string>("");
+  const [planeProjectId, setPlaneProjectId] = useState<string>("");
   const [planeToken, setPlaneToken] = useState<string>("");
   // PR key -> diff lines (or an error line), fetched when a PR is opened.
   const [diffs, setDiffs] = useState<Record<string, string[]>>({});
   const [layout, setLayout] = useLayout();
-  const agents = useAgents(section === "agents");
-  const builder = useBuilder();
+  const [features, setFeature] = useFeatures();
+  const agents = useAgents(section === "agents", features.agents);
+  const builder = useBuilder(features.prototypes);
   const spaces = useSpaces();
+  const requests = useRequests();
+  // A view whose feature was just turned off falls back to Overview.
+  const sectionFeature: Partial<Record<SectionKey, FeatureKey>> = {
+    tickets: "tickets",
+    git: "prs",
+    agents: "agents",
+    builder: "prototypes",
+    requests: "requests",
+  };
+  useEffect(() => {
+    const needed = sectionFeature[section];
+    if (needed && !features[needed]) setSection("overview");
+  }, [section, features]);
   // Files or Changes beside the terminals, for the focused terminal's folder.
   const [sidePanel, setSidePanel] = useState<PanelMode | null>(null);
   const space = spaces.status[spaces.cwdOf(spaces.active)];
@@ -90,7 +123,8 @@ export function App(): React.JSX.Element {
       .then((payload) => {
         applyDashboard(payload);
       })
-      .catch(() => {
+      .catch((err) => {
+        setSyncError(String(err));
         setDataState("error");
       });
   }, []);
@@ -180,6 +214,8 @@ export function App(): React.JSX.Element {
     setSection(nextSection);
     if (view) setPrView(view);
     setDataState("full");
+    setActionStatus("");
+    setConfirmMergeKey("");
   }
 
   function openSpace(id: string): void {
@@ -216,7 +252,8 @@ export function App(): React.JSX.Element {
       const next = await syncProviders();
       applyDashboard(next);
       setDataState("full");
-    } catch {
+    } catch (err) {
+      setSyncError(String(err));
       setDataState("error");
     }
   }
@@ -238,32 +275,43 @@ export function App(): React.JSX.Element {
     }
   }
 
-  async function handleCheckoutTicketBranch(ticketKey: string): Promise<void> {
-    const branch = await startTicketBranch(ticketKey);
-    const next = await getDashboardState();
-    applyDashboard(next);
-    setActionStatus(`Checked out ${branch}`);
+  async function runAction(action: () => Promise<string>): Promise<void> {
+    setBusy(true);
+    try {
+      setActionStatus(await action());
+    } catch (err) {
+      setActionStatus(String(err));
+    } finally {
+      setBusy(false);
+    }
   }
 
-  async function handleApproveActivePr(): Promise<void> {
-    if (!activePr) return;
-    await approvePr(activePr.repo, activePr.number);
-    const next = await getDashboardState();
-    applyDashboard(next);
-    setActionStatus(`Approved ${prKey(activePr)}`);
+  function handleCheckoutTicketBranch(ticketKey: string): Promise<void> {
+    return runAction(async () => {
+      const branch = await startTicketBranch(ticketKey);
+      applyDashboard(await getDashboardState());
+      return `Checked out ${branch}`;
+    });
   }
 
-  async function handleMergeActivePr(): Promise<void> {
-    if (!activePr) return;
-    const next = await mergePrAndCloseTicket(
-      activePr.repo,
-      activePr.number,
-      activePr.linked_ticket_key
-    );
-    applyDashboard(next);
-    setActionStatus(
-      `Merged ${prKey(activePr)} and closed ${activePr.linked_ticket_key ?? "branch"}`
-    );
+  function handleApproveActivePr(): Promise<void> {
+    return runAction(async () => {
+      await approvePr(activePr.repo, activePr.number);
+      applyDashboard(await getDashboardState());
+      return `Approved ${prKey(activePr)}`;
+    });
+  }
+
+  function handleMergeActivePr(): Promise<void> {
+    setConfirmMergeKey("");
+    return runAction(async () => {
+      applyDashboard(
+        await mergePrAndCloseTicket(activePr.repo, activePr.number, activePr.linked_ticket_key)
+      );
+      return activePr.linked_ticket_key
+        ? `Merged ${prKey(activePr)} and closed ${activePr.linked_ticket_key}`
+        : `Merged ${prKey(activePr)}`;
+    });
   }
 
   async function handleLoadPlaneProjects(): Promise<void> {
@@ -292,8 +340,8 @@ export function App(): React.JSX.Element {
     const baseConfig: WorkspaceConfig = dashboard?.config ?? {
       issue_provider: "plane.so",
       plane_base_url: "https://api.plane.so",
-      plane_workspace_slug: "panguyuban",
-      plane_project_id: "panguyuban-core",
+      plane_workspace_slug: "",
+      plane_project_id: "",
       git_provider: "github",
       github_api_url: "https://api.github.com",
       github_repo: "",
@@ -316,7 +364,7 @@ export function App(): React.JSX.Element {
     }
     setPlaneToken("");
     setGithubToken("");
-    setSettingsStatus("Saved provider settings to SQLite and keychain");
+    setSettingsStatus("Settings saved");
   }
 
   return (
@@ -343,7 +391,7 @@ export function App(): React.JSX.Element {
               title={layout.sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
               onClick={() => setLayout({ sidebarCollapsed: !layout.sidebarCollapsed })}
             >
-              {layout.sidebarCollapsed ? "»" : "«"}
+              <Icon name={layout.sidebarCollapsed ? "expand" : "collapse"} />
             </button>
           </div>
           {!layout.sidebarCollapsed && (
@@ -362,7 +410,7 @@ export function App(): React.JSX.Element {
 
           <nav className="nav-card nav-card--views" aria-label="Views">
             <NavItem
-              glyph="⌂"
+              icon="home"
               label="Overview"
               hint="What needs you"
               current={section === "overview"}
@@ -370,8 +418,9 @@ export function App(): React.JSX.Element {
               attention={agents.waiting > 0}
               onSelect={() => handleMenuSelect("overview")}
             />
-            <NavItem
-              glyph="◫"
+            {features.tickets && (
+<NavItem
+              icon="ticket"
               label="Tickets"
               hint="Plane"
               count={tickets.length}
@@ -382,8 +431,10 @@ export function App(): React.JSX.Element {
               onSelect={() => handleMenuSelect("tickets")}
               onRefresh={() => handleRefresh("plane")}
             />
-            <NavItem
-              glyph="⑂"
+)}
+            {features.prs && (
+<NavItem
+              icon="pr"
               label="Pull requests"
               hint={space?.github_repo ?? "GitHub"}
               count={prs.length}
@@ -394,8 +445,10 @@ export function App(): React.JSX.Element {
               onSelect={() => handleMenuSelect("git")}
               onRefresh={() => handleRefresh("git")}
             />
-            <NavItem
-              glyph="✦"
+)}
+            {features.agents && (
+<NavItem
+              icon="agents"
               label="Agents"
               hint={
                 agents.waiting
@@ -413,8 +466,10 @@ export function App(): React.JSX.Element {
               onSelect={() => handleMenuSelect("agents")}
               onRefresh={agents.refresh}
             />
-            <NavItem
-              glyph="▣"
+)}
+            {features.prototypes && (
+<NavItem
+              icon="prototypes"
               label="Prototypes"
               hint="Guided builder"
               count={builder.projects.length}
@@ -422,9 +477,21 @@ export function App(): React.JSX.Element {
               collapsed={layout.sidebarCollapsed}
               onSelect={() => handleMenuSelect("builder")}
             />
+)}
+            {features.requests && (
+<NavItem
+              icon="requests"
+              label="Requests"
+              hint="HTTP client"
+              count={requests.drafts.length}
+              current={section === "requests"}
+              collapsed={layout.sidebarCollapsed}
+              onSelect={() => handleMenuSelect("requests")}
+            />
+)}
           </nav>
 
-          {!layout.sidebarCollapsed && (
+          {!layout.sidebarCollapsed && features.agents && (
             <SidebarAgents
               agents={agents}
               onOpen={(id) => {
@@ -436,7 +503,7 @@ export function App(): React.JSX.Element {
 
           <nav className="nav-card nav-card--bottom" aria-label="System">
             <NavItem
-              glyph="⚙"
+              icon="settings"
               label="Settings"
               hint="Plane & GitHub"
               current={section === "settings"}
@@ -494,7 +561,7 @@ export function App(): React.JSX.Element {
                   aria-pressed={sidePanel === mode}
                   onClick={() => setSidePanel(sidePanel === mode ? null : mode)}
                 >
-                  <span aria-hidden="true">{mode === "files" ? "▤" : "±"}</span>
+                  <Icon name={mode} size={14} />
                   {mode === "files" ? "Files" : "Changes"}
                 </button>
               ))}
@@ -527,11 +594,7 @@ export function App(): React.JSX.Element {
             <main className="main-stage main-stage--single">
               <section className="pane" aria-live="polite">
                 <div className="state-box">
-                  <h1>Synchronising Plane.so and GitHub records</h1>
-                  <p className="lead">
-                    Reading SQLite cache and polling active adapters over Rust
-                    async runtime.
-                  </p>
+                  <h1>Syncing tickets and pull requests…</h1>
                   <div className="skeleton-line"></div>
                   <div className="skeleton-line"></div>
                   <div className="skeleton-line"></div>
@@ -540,21 +603,23 @@ export function App(): React.JSX.Element {
             </main>
           )}
 
-          {section !== "terminal" && dataState === "empty" && (
+          {section !== "terminal" &&
+            (dataState === "empty" ||
+              (dataState === "full" &&
+                ((section === "tickets" && !activeTicket) || (section === "git" && !activePr)))) && (
             <main className="main-stage main-stage--single">
               <section className="pane" aria-live="polite">
                 <div className="state-box">
-                  <h1>No assigned tickets or pull requests in this queue</h1>
+                  <h1>{section === "git" ? "No pull requests here" : "No tickets here"}</h1>
                   <p className="lead">
-                    Your Plane workspace queue is clear, or you can pull the
-                    latest changes from your configured providers.
+                    Nothing is waiting on you, or it has not synced yet.
                   </p>
                   <button
                     type="button"
                     className="btn btn--primary"
                     onClick={handleSyncProviders}
                   >
-                    Sync providers now
+                    Sync now
                   </button>
                 </div>
               </section>
@@ -565,11 +630,10 @@ export function App(): React.JSX.Element {
             <main className="main-stage main-stage--single">
               <section className="pane" aria-live="polite">
                 <div className="state-box">
-                  <h1>Plane.so adapter token expired</h1>
+                  <h1>Could not sync tickets and pull requests</h1>
                   <p className="lead">
-                    The Rust provider-plane client received HTTP 401 from
-                    api.plane.so. Update your API key in provider settings or
-                    retry connection.
+                    {syncError || "The sync failed."} Check your Plane and GitHub tokens in
+                    Settings, or retry.
                   </p>
                   <div className="action-group">
                     <button
@@ -577,7 +641,7 @@ export function App(): React.JSX.Element {
                       className="btn btn--primary"
                       onClick={() => handleMenuSelect("settings")}
                     >
-                      Open provider settings
+                      Open settings
                     </button>
                     <button
                       type="button"
@@ -605,14 +669,7 @@ export function App(): React.JSX.Element {
                   onChange={(listWidth) => setLayout({ listWidth })}
                 />
                 <div className="pane-header">
-                  <h1>Tickets (Plane.so)</h1>
-                  <button
-                    type="button"
-                    className="btn"
-                    onClick={() => setSelectedTicketKey("PAN-149")}
-                  >
-                    New ticket
-                  </button>
+                  <h1>Tickets</h1>
                 </div>
 
                 <FilterTabs
@@ -659,9 +716,9 @@ export function App(): React.JSX.Element {
                           className="record-select-btn"
                           onClick={() => setSelectedTicketKey(ticket.key)}
                         >
-                          Inspect {ticket.key}
+                          {ticket.key}
                         </button>
-                        <span className="chip chip--ok">{ticket.state}</span>
+                        <span className={stateChip(ticket.state)}>{humanize(ticket.state)}</span>
                       </div>
                       <div className="record-title">{ticket.title}</div>
                       <div className="record-meta">
@@ -674,6 +731,9 @@ export function App(): React.JSX.Element {
                       </div>
                     </li>
                   ))}
+                  {filteredTickets.length === 0 && (
+                    <li className="record-item record-meta">No tickets match this filter</li>
+                  )}
                 </ul>
               </section>
 
@@ -701,8 +761,8 @@ export function App(): React.JSX.Element {
 
                 <div className="reading-row" aria-label="Ticket linked readings">
                   <div className="reading-cell">
-                    <span className="reading-label">Plane state</span>
-                    <span className="reading-value">{activeTicket.state}</span>
+                    <span className="reading-label">State</span>
+                    <span className="reading-value">{humanize(activeTicket.state)}</span>
                   </div>
                   <div className="reading-cell">
                     <span className="reading-label">Linked pull request</span>
@@ -711,41 +771,12 @@ export function App(): React.JSX.Element {
                     </span>
                   </div>
                   <div className="reading-cell">
-                    <span className="reading-label">CI verification</span>
+                    <span className="reading-label">Checks</span>
                     <span className="reading-value">
                       {linkedPrForTicket
                         ? formatCiState(linkedPrForTicket)
                         : "Not started"}
                     </span>
-                  </div>
-                </div>
-
-                <div className="inspector-card">
-                  <div className="inspector-section">
-                    <h3>Ticket to Git audit trail</h3>
-                    <div className="trail-list">
-                      <div className="trail-row">
-                        <span className="measured">02:14:09</span>
-                        <span className="person-tag">
-                          {activeTicket.assignee ?? "@ansar"}
-                        </span>
-                        <span>
-                          Synced {activeTicket.key} from Plane workspace
-                        </span>
-                      </div>
-                      {linkedPrForTicket && (
-                        <div className="trail-row">
-                          <span className="measured">02:41:12</span>
-                          <span className="person-tag">
-                            {linkedPrForTicket.author}
-                          </span>
-                          <span>
-                            Linked pull request #{linkedPrForTicket.number} on{" "}
-                            {linkedPrForTicket.source_branch}
-                          </span>
-                        </div>
-                      )}
-                    </div>
                   </div>
                 </div>
 
@@ -756,17 +787,18 @@ export function App(): React.JSX.Element {
                       className="btn btn--primary"
                       onClick={() => handleMenuSelect("git", "merge")}
                     >
-                      Open PR view
+                      Open pull requests
                     </button>
                     <button
                       type="button"
                       className="btn"
+                      disabled={busy}
                       onClick={() => handleCheckoutTicketBranch(activeTicket.key)}
                     >
                       Checkout branch
                     </button>
                   </div>
-                  <span className="measured">{actionStatus}</span>
+                  <span className="measured" role="status">{actionStatus}</span>
                 </div>
               </section>
             </main>
@@ -785,7 +817,7 @@ export function App(): React.JSX.Element {
                   onChange={(listWidth) => setLayout({ listWidth })}
                 />
                 <div className="pane-header">
-                  <h1>Git and Pull Requests</h1>
+                  <h1>Pull requests</h1>
                   <span className="chip chip--instrument">
                     {dashboard?.config.github_repo || "All repos"}
                   </span>
@@ -835,20 +867,23 @@ export function App(): React.JSX.Element {
                           className="record-select-btn"
                           onClick={() => setSelectedPrKey(prKey(pr))}
                         >
-                          Inspect PR #{pr.number}
+                          #{pr.number}
                         </button>
-                        <span className="chip chip--ok">{pr.review_state}</span>
+                        <span className={stateChip(pr.review_state)}>{humanize(pr.review_state)}</span>
                       </div>
                       <div className="record-title">{pr.title}</div>
                       <div className="record-meta">
                         <span className="person-tag">{pr.author}</span>
                         <span className="measured">{pr.repo}</span>
                         <span className="measured">
-                          {pr.linked_ticket_key ?? "unlinked"}
+                          {pr.linked_ticket_key ?? "No ticket"}
                         </span>
                       </div>
                     </li>
                   ))}
+                  {filteredPrs.length === 0 && (
+                    <li className="record-item record-meta">No pull requests match this filter</li>
+                  )}
                 </ul>
               </section>
 
@@ -865,20 +900,20 @@ export function App(): React.JSX.Element {
                     <h2>{activePr.title}</h2>
                   </div>
                   <div className="pane-tools">
-                    <span className="chip chip--ok">{activePr.review_state}</span>
+                    <span className={stateChip(activePr.review_state)}>{humanize(activePr.review_state)}</span>
                     <FocusButton layout={layout} setLayout={setLayout} />
                   </div>
                 </div>
 
-                <div className="reading-row" aria-label="Pull request telemetry">
+                <div className="reading-row" aria-label="Pull request summary">
                   <div className="reading-cell">
-                    <span className="reading-label">Diff delta</span>
+                    <span className="reading-label">Changes</span>
                     <span className="reading-value">
-                      +{activePr.additions} / -{activePr.deletions}
+                      +{activePr.additions} / −{activePr.deletions}
                     </span>
                   </div>
                   <div className="reading-cell">
-                    <span className="reading-label">CI checks</span>
+                    <span className="reading-label">Checks</span>
                     <span className="reading-value">
                       {formatCiState(activePr)}
                     </span>
@@ -886,7 +921,7 @@ export function App(): React.JSX.Element {
                   <div className="reading-cell">
                     <span className="reading-label">Linked ticket</span>
                     <span className="reading-value">
-                      {activePr.linked_ticket_key ?? "Unlinked"}
+                      {activePr.linked_ticket_key ?? "None"}
                     </span>
                   </div>
                 </div>
@@ -914,15 +949,34 @@ export function App(): React.JSX.Element {
                       <button
                         type="button"
                         className="btn btn--primary"
+                        disabled={busy}
                         onClick={handleApproveActivePr}
                       >
-                        Approve PR
+                        Approve
                       </button>
+                    ) : confirmMergeKey === prKey(activePr) ? (
+                      <>
+                        <button
+                          type="button"
+                          className="btn btn--primary"
+                          disabled={busy}
+                          onClick={handleMergeActivePr}
+                        >
+                          {activePr.linked_ticket_key
+                            ? `Confirm: merge and close ${activePr.linked_ticket_key}`
+                            : "Confirm merge"}
+                        </button>
+                        <button type="button" className="btn" onClick={() => setConfirmMergeKey("")}>
+                          Cancel
+                        </button>
+                      </>
                     ) : (
                       <button
                         type="button"
                         className="btn btn--primary"
-                        onClick={handleMergeActivePr}
+                        disabled={busy || !activePr.mergeable}
+                        title={activePr.mergeable ? undefined : "GitHub reports this PR cannot be merged yet"}
+                        onClick={() => setConfirmMergeKey(prKey(activePr))}
                       >
                         Squash and merge
                       </button>
@@ -930,6 +984,7 @@ export function App(): React.JSX.Element {
                     <button
                       type="button"
                       className="btn"
+                      disabled={busy}
                       onClick={() =>
                         handleCheckoutTicketBranch(
                           activePr.linked_ticket_key ?? activePr.source_branch
@@ -978,6 +1033,7 @@ export function App(): React.JSX.Element {
           {dataState === "full" && section === "overview" && (
             <main className="main-stage main-stage--single">
               <OverviewView
+                features={features}
                 myActiveTickets={assignedTickets.filter((t) => t.state === "InProgress" || t.state === "InReview")}
                 reviewPrs={reviewPrs}
                 mergePrs={mergePrs}
@@ -1008,215 +1064,271 @@ export function App(): React.JSX.Element {
             </main>
           )}
 
+          {dataState === "full" && section === "requests" && <RequestsView requests={requests} />}
+
           {dataState === "full" && section === "settings" && (
             <main className="main-stage main-stage--single">
-              <section className="pane" aria-label="Provider adapter settings">
+              <section className="pane" aria-label="Settings">
                 <div className="pane-header">
                   <div>
-                    <h1>Modular provider adapters</h1>
-                    <p className="lead">
-                      Panguyuban separates Rust traits in panguyuban-core from
-                      platform adapters so you can swap Plane.so or GitHub without
-                      touching the UI.
-                    </p>
+                    <h1>Settings</h1>
                   </div>
                 </div>
 
-                <div className="settings-grid">
-                  <div className="inspector-card">
-                    <div className="inspector-section">
-                      <div className="record-top">
-                        <h2>IssueProvider trait</h2>
-                        <span className="chip chip--ok">
-                          Active: provider-plane
-                        </span>
-                      </div>
-                      <p>
-                        Connects ticket queues, state transitions, and cycle
-                        metadata to the Tauri frontend.
-                      </p>
-                      <div className="field-group">
-                        <label className="field-label" htmlFor="plane-url">
-                          Plane server URL
-                        </label>
-                        <input
-                          id="plane-url"
-                          name="plane-url"
-                          type="url"
-                          autoComplete="url"
-                          className="input-field"
-                          placeholder="https://plane.example.com"
-                          value={planeBaseUrl}
-                          onChange={(e) => setPlaneBaseUrl(e.target.value)}
-                        />
-                        <span className="field-help">
-                          Self-hosted: your Plane domain. Cloud: https://api.plane.so
-                        </span>
-                      </div>
-                      <div className="field-group">
-                        <label className="field-label" htmlFor="plane-slug">
-                          Plane workspace slug
-                        </label>
-                        <input
-                          id="plane-slug"
-                          name="plane-slug"
-                          type="text"
-                          autoComplete="organization"
-                          className="input-field"
-                          value={planeWorkspaceSlug}
-                          onChange={(e) => setPlaneWorkspaceSlug(e.target.value)}
-                        />
-                        <span className="field-help">
-                          From your Plane URL: plane.example.com/[slug]/projects
-                        </span>
-                      </div>
-                      <div className="field-group">
-                        <label className="field-label" htmlFor="plane-project">
-                          Plane project
-                        </label>
-                        <select
-                          id="plane-project"
-                          name="plane-project"
-                          className="input-field"
-                          value={planeProjectId}
-                          onChange={(e) => setPlaneProjectId(e.target.value)}
-                        >
-                          <option value="">All projects (first 4)</option>
-                          {planeProjectId &&
-                            !planeProjects.some((p) => p.id === planeProjectId) && (
-                              <option value={planeProjectId}>{planeProjectId}</option>
-                            )}
-                          {planeProjects.map((p) => (
-                            <option key={p.id} value={p.id}>
-                              {p.identifier ? `${p.identifier} · ` : ""}
-                              {p.name ?? p.id}
-                            </option>
-                          ))}
-                        </select>
-                        <button
-                          type="button"
-                          className="btn"
-                          onClick={handleLoadPlaneProjects}
-                        >
-                          Test &amp; load projects
-                        </button>
-                        <span className="field-help">
-                          Uses the URL, slug and token above (or the saved token).
-                        </span>
-                      </div>
-                      <div className="field-group">
-                        <label className="field-label" htmlFor="plane-token">
-                          Plane API token
-                        </label>
-                        <input
-                          id="plane-token"
-                          name="plane-token"
-                          type="password"
-                          autoComplete="off"
-                          className="input-field"
-                          placeholder="Stored in OS keychain"
-                          value={planeToken}
-                          onChange={(e) => setPlaneToken(e.target.value)}
-                        />
-                        <span className="field-help">
-                          Profile settings, Personal access tokens. Saved in OS
-                          keychain.
-                        </span>
-                      </div>
+                <div className="settings-page">
+                  <section className="settings-section">
+                    <div className="settings-aside">
+                      <h2>Features</h2>
+                      <p>Turn off what you don’t use. It disappears from the app and stops running in the background.</p>
                     </div>
-                  </div>
+                    <ul className="settings-body feature-list">
+                      {FEATURES.map((f) => (
+                        <li key={f.key} className="feature-row">
+                          <button
+                            type="button"
+                            role="switch"
+                            className="switch"
+                            aria-checked={features[f.key]}
+                            aria-label={f.label}
+                            onClick={() => setFeature(f.key, !features[f.key])}
+                          />
+                          <div className="feature-text">
+                            <span className="feature-name">{f.label}</span>
+                            <span className="feature-note">{f.what}</span>
+                            {f.cost && <span className="feature-note">{f.cost}</span>}
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  </section>
 
-                  <div className="inspector-card">
-                    <div className="inspector-section">
-                      <div className="record-top">
-                        <h2>GitProvider trait</h2>
-                        <span className="chip chip--ok">
-                          Active: provider-github
-                        </span>
-                      </div>
-                      <p>
-                        Manages pull request review queues, CI status checks,
-                        local git2 branches, and squash merges.
-                      </p>
-                      <div className="field-group">
-                        <label className="field-label" htmlFor="github-repo">
-                          Repository filter
-                        </label>
-                        <input
-                          id="github-repo"
-                          name="github-repo"
-                          type="text"
-                          autoComplete="off"
-                          className="input-field"
-                          placeholder="owner/repo — empty: all your PRs"
-                          value={githubRepo}
-                          onChange={(e) => setGithubRepo(e.target.value)}
-                        />
-                      </div>
-                      <div className="field-group">
-                        <label className="field-label" htmlFor="local-repo-path">
-                          Local git repository path
-                        </label>
-                        <input
-                          id="local-repo-path"
-                          name="local-repo-path"
-                          type="text"
-                          autoComplete="off"
-                          className="input-field"
-                          value={localRepoPath}
-                          onChange={(e) => setLocalRepoPath(e.target.value)}
-                        />
-                      </div>
-                      <div className="field-group">
-                        <label className="field-label" htmlFor="github-token">
-                          GitHub personal access token
-                        </label>
-                        <input
-                          id="github-token"
-                          name="github-token"
-                          type="password"
-                          autoComplete="off"
-                          className="input-field"
-                          placeholder="Leave empty to use gh auth token"
-                          value={githubToken}
-                          onChange={(e) => setGithubToken(e.target.value)}
-                        />
-                        <span className="field-help">
-                          Optional. Falls back to the GitHub CLI login (gh auth
-                          login) when no token is saved.
-                        </span>
-                      </div>
+                  <section className="settings-section">
+                    <div className="settings-aside">
+                      <h2>Appearance</h2>
+                      <p>How the app looks.</p>
                     </div>
-                  </div>
-                </div>
+                    <div className="settings-body">
+              <div className="field-group">
+                <label className="field-label" htmlFor="theme">
+                  Theme
+                </label>
+                <select
+                  id="theme"
+                  name="theme"
+                  className="input-field"
+                  value={theme}
+                  onChange={(e) => {
+                    setTheme(e.target.value);
+                    applyTheme(e.target.value);
+                  }}
+                >
+                  {THEMES.map((t) => (
+                    <option key={t.value} value={t.value}>
+                      {t.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+                    </div>
+                  </section>
 
-                <div className="action-bar">
-                  <div className="action-group">
-                    <button
-                      type="button"
-                      className="btn btn--primary"
-                      onClick={handleSaveSettings}
-                    >
-                      Save settings
-                    </button>
-                  </div>
-                  <span className="measured" role="status">
-                    {settingsStatus}
+                  <section className="settings-section">
+                    <div className="settings-aside">
+                      <h2>Plane</h2>
+                      <p>Where your tickets come from.</p>
+                    </div>
+                    <div className="settings-body">
+                      {features.tickets ? (
+                        <>
+                <div className="field-group">
+                  <label className="field-label" htmlFor="plane-url">
+                    Plane server URL
+                  </label>
+                  <input
+                    id="plane-url"
+                    name="plane-url"
+                    type="url"
+                    autoComplete="url"
+                    className="input-field"
+                    placeholder="https://plane.example.com"
+                    value={planeBaseUrl}
+                    onChange={(e) => setPlaneBaseUrl(e.target.value)}
+                  />
+                  <span className="field-help">
+                    Self-hosted: your Plane domain. Cloud: https://api.plane.so
                   </span>
+                </div>
+                <div className="field-group">
+                  <label className="field-label" htmlFor="plane-slug">
+                    Plane workspace slug
+                  </label>
+                  <input
+                    id="plane-slug"
+                    name="plane-slug"
+                    type="text"
+                    autoComplete="organization"
+                    className="input-field"
+                    value={planeWorkspaceSlug}
+                    onChange={(e) => setPlaneWorkspaceSlug(e.target.value)}
+                  />
+                  <span className="field-help">
+                    From your Plane URL: plane.example.com/[slug]/projects
+                  </span>
+                </div>
+                <div className="field-group">
+                  <label className="field-label" htmlFor="plane-project">
+                    Plane project
+                  </label>
+                  <select
+                    id="plane-project"
+                    name="plane-project"
+                    className="input-field"
+                    value={planeProjectId}
+                    onChange={(e) => setPlaneProjectId(e.target.value)}
+                  >
+                    <option value="">All projects (first 4)</option>
+                    {planeProjectId &&
+                      !planeProjects.some((p) => p.id === planeProjectId) && (
+                        <option value={planeProjectId}>{planeProjectId}</option>
+                      )}
+                    {planeProjects.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.identifier ? `${p.identifier} · ` : ""}
+                        {p.name ?? p.id}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    className="btn"
+                    onClick={handleLoadPlaneProjects}
+                  >
+                    Test &amp; load projects
+                  </button>
+                  <span className="field-help">
+                    Uses the URL, slug and token above (or the saved token).
+                  </span>
+                </div>
+                <div className="field-group">
+                  <label className="field-label" htmlFor="plane-token">
+                    Plane API token
+                  </label>
+                  <input
+                    id="plane-token"
+                    name="plane-token"
+                    type="password"
+                    autoComplete="off"
+                    className="input-field"
+                    placeholder="Stored in your keychain"
+                    value={planeToken}
+                    onChange={(e) => setPlaneToken(e.target.value)}
+                  />
+                  <span className="field-help">
+                    Profile settings, Personal access tokens. Saved in OS
+                    keychain.
+                  </span>
+                </div>
+                        </>
+                      ) : (
+                        <p className="settings-off">Tickets is turned off.</p>
+                      )}
+                    </div>
+                  </section>
+
+                  <section className="settings-section">
+                    <div className="settings-aside">
+                      <h2>GitHub</h2>
+                      <p>Where your pull requests, checks and merges come from.</p>
+                    </div>
+                    <div className="settings-body">
+                      {features.prs ? (
+                        <>
+                <div className="field-group">
+                  <label className="field-label" htmlFor="github-repo">
+                    Repository filter
+                  </label>
+                  <input
+                    id="github-repo"
+                    name="github-repo"
+                    type="text"
+                    autoComplete="off"
+                    className="input-field"
+                    placeholder="owner/repo — empty: all your PRs"
+                    value={githubRepo}
+                    onChange={(e) => setGithubRepo(e.target.value)}
+                  />
+                </div>
+                <div className="field-group">
+                  <label className="field-label" htmlFor="local-repo-path">
+                    Local git repository path
+                  </label>
+                  <input
+                    id="local-repo-path"
+                    name="local-repo-path"
+                    type="text"
+                    autoComplete="off"
+                    className="input-field"
+                    value={localRepoPath}
+                    onChange={(e) => setLocalRepoPath(e.target.value)}
+                  />
+                </div>
+                <div className="field-group">
+                  <label className="field-label" htmlFor="github-token">
+                    GitHub personal access token
+                  </label>
+                  <input
+                    id="github-token"
+                    name="github-token"
+                    type="password"
+                    autoComplete="off"
+                    className="input-field"
+                    placeholder="Leave empty to use gh auth token"
+                    value={githubToken}
+                    onChange={(e) => setGithubToken(e.target.value)}
+                  />
+                  <span className="field-help">
+                    Optional. Falls back to the GitHub CLI login (gh auth
+                    login) when no token is saved.
+                  </span>
+                </div>
+                        </>
+                      ) : (
+                        <p className="settings-off">Pull requests is turned off.</p>
+                      )}
+                    </div>
+                  </section>
+
+                  {(features.tickets || features.prs) && (
+                    <div className="settings-save">
+                      <button type="button" className="btn btn--primary" onClick={handleSaveSettings}>
+                        Save connections
+                      </button>
+                      <span className="measured" role="status">
+                        {settingsStatus}
+                      </span>
+                    </div>
+                  )}
                 </div>
               </section>
             </main>
           )}
 
           <footer className="statusbar">
-            <span>⌂ This computer</span>
-            {space?.branch && <span>⑂ {space.branch}</span>}
-            <span data-attention={agents.waiting > 0 || undefined}>
-              ● {agents.sessions.length} agent{agents.sessions.length === 1 ? "" : "s"}
-            </span>
+            <span>This computer</span>
+            {space?.branch && (
+              <span>
+                <Icon name="pr" size={12} />
+                {space.branch}
+              </span>
+            )}
+            {features.agents && (
+              <span data-attention={agents.waiting > 0 || undefined}>
+                ● {agents.sessions.length} agent{agents.sessions.length === 1 ? "" : "s"}
+              </span>
+            )}
             <span className="tabbar-spacer" />
-            <span>Plane: {dashboard?.config.plane_project_id ?? "panguyuban-core"}</span>
-            <span>GitHub: {space?.github_repo || dashboard?.config.github_repo || "all repos"}</span>
+            {features.tickets && <span>Plane: {dashboard?.config.plane_project_id || "all projects"}</span>}
+            {features.prs && <span>GitHub: {space?.github_repo || dashboard?.config.github_repo || "all repos"}</span>}
           </footer>
         </div>
       </div>
@@ -1286,7 +1398,7 @@ type PrView = "review" | "mine" | "merge" | "all";
 
 /** One sidebar section: select it, see its count, refresh its provider. */
 function NavItem(props: {
-  glyph: string;
+  icon: IconName;
   label: string;
   hint: string;
   count?: number;
@@ -1312,15 +1424,15 @@ function NavItem(props: {
         title={props.collapsed ? props.label : undefined}
         onClick={props.onSelect}
       >
-        <span className="nav-glyph" aria-hidden="true">
-          {props.glyph}
+        <span className="nav-glyph">
+          <Icon name={props.icon} />
         </span>
         <span className="nav-text">
           <span className="nav-label">{props.label}</span>
           <span className="nav-hint">{props.hint}</span>
         </span>
         {props.count !== undefined && (
-          <span className="nav-count measured">{padCount(props.count)}</span>
+          <span className="nav-count measured">{props.count}</span>
         )}
       </button>
       {props.onRefresh && (
@@ -1333,7 +1445,7 @@ function NavItem(props: {
           data-spinning={props.refreshing || undefined}
           onClick={props.onRefresh}
         >
-          ↻
+          <Icon name="refresh" size={14} />
         </button>
       )}
     </div>
