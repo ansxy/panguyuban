@@ -644,7 +644,7 @@ mod tests {
     #[test]
     fn parses_graphql_pr_search_with_review_ci_and_merge_state() {
         let raw = r#"{ "data": { "search": { "nodes": [
-            { "number": 1833, "title": "fix: payer mapping", "url": "https://github.com/acme/backend/pull/1833",
+            { "number": 1833, "title": "fix: price mapping", "url": "https://github.com/acme/backend/pull/1833",
               "repository": { "nameWithOwner": "acme/backend" }, "author": { "login": "ansxy" },
               "headRefName": "fix/ABC-123", "baseRefName": "main",
               "mergeable": "MERGEABLE", "mergeStateStatus": "CLEAN", "additions": 5, "deletions": 1,
@@ -654,7 +654,7 @@ mod tests {
                   { "status": "IN_PROGRESS", "conclusion": null },
                   { "state": "FAILURE" }
               ] } } } } ] } },
-            { "number": 102, "title": "feat: care status", "url": "u",
+            { "number": 102, "title": "feat: order status", "url": "u",
               "repository": { "nameWithOwner": "acme/web" }, "author": null,
               "headRefName": "feat/x", "baseRefName": "develop",
               "mergeable": "CONFLICTING", "mergeStateStatus": "DIRTY", "reviewDecision": null,

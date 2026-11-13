@@ -50,7 +50,7 @@ Acceptance criteria:
 |---|---|---|---|
 | | | | |
 
-All data is made-up sample data. No real client, patient or policyholder records.
+All data is made-up sample data. No real client, customer or personal records.
 
 ## 7. Language and look
 
@@ -77,7 +77,7 @@ These are fixed for every Panguyuban project. Do not edit.
 - Changing a story's acceptance criteria.
 
 **Never**
-- Use real personal, patient, policyholder or client-staff data.
+- Use real personal, customer or client-staff data.
 - Put passwords, tokens or keys in the project.
 - Build items listed under *Not doing*.
 - Skip or disable the standards checks.

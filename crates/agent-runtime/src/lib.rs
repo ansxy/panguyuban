@@ -372,7 +372,7 @@ mod tests {
 
     fn request(transcript: Vec<Turn>) -> InterviewRequest {
         InterviewRequest {
-            project_name: "Claims demo".into(),
+            project_name: "Orders demo".into(),
             client: "Acme".into(),
             author: "Dewi".into(),
             transcript,
@@ -402,11 +402,11 @@ mod tests {
     #[test]
     fn prompt_lists_the_conversation_in_order() {
         let prompt = interview_prompt(&request(vec![
-            Turn { from: Speaker::User, text: "A claims dashboard".into() },
+            Turn { from: Speaker::User, text: "A orders dashboard".into() },
             Turn { from: Speaker::Agent, text: "When is the demo?".into() },
             Turn { from: Speaker::User, text: " Friday ".into() },
         ]));
-        let first = prompt.find("[User]\nA claims dashboard").unwrap();
+        let first = prompt.find("[User]\nA orders dashboard").unwrap();
         let second = prompt.find("[You]\nWhen is the demo?").unwrap();
         let third = prompt.find("[User]\nFriday").unwrap();
         assert!(first < second && second < third);
@@ -420,15 +420,15 @@ mod tests {
 
     #[test]
     fn reply_with_a_prd_is_split_from_the_message() {
-        let reply = split_reply("Here is the summary.\n<prd>\n# PRD: Claims\n\nStatus: Draft\n</prd>\nIs this right?");
+        let reply = split_reply("Here is the summary.\n<prd>\n# PRD: Orders\n\nStatus: Draft\n</prd>\nIs this right?");
         assert_eq!(reply.message, "Here is the summary.\n\nIs this right?");
-        assert_eq!(reply.prd.as_deref(), Some("# PRD: Claims\n\nStatus: Draft"));
+        assert_eq!(reply.prd.as_deref(), Some("# PRD: Orders\n\nStatus: Draft"));
     }
 
     #[test]
     fn cut_off_prd_is_kept_and_empty_prd_is_ignored() {
-        let cut = split_reply("Summary\n<prd>\n# PRD: Claims");
-        assert_eq!(cut.prd.as_deref(), Some("# PRD: Claims"));
+        let cut = split_reply("Summary\n<prd>\n# PRD: Orders");
+        assert_eq!(cut.prd.as_deref(), Some("# PRD: Orders"));
         let empty = split_reply("Summary <prd>  </prd>");
         assert_eq!(empty, InterviewReply { message: "Summary".into(), prd: None });
     }
@@ -525,7 +525,7 @@ mod tests {
     fn live_claude_plan_sizes_steps_and_flags_real_systems() {
         let dir = std::env::temp_dir().join("panguyuban-live-test");
         std::fs::create_dir_all(&dir).unwrap();
-        let prd = "# PRD: Claims demo\n\nStatus: Approved\n\n## 4. Stories\n\n### S1. Open the claims list\n\nAcceptance criteria:\n- [ ] The list shows 20 sample claims with number, member, status and days open.\n\n### S2. Approve or reject a claim\n\nAcceptance criteria:\n- [ ] A manager can approve or reject a submitted claim, and an officer cannot.\n- [ ] The claim's status and history update on every screen that shows it.\n\n### S3. Sign in with the client's company account\n\nAcceptance criteria:\n- [ ] The user signs in through the client's real single sign-on.\n\n## 5. Scope\n\n### Later\n- Export\n\n## 6. Real or pretend\n\n| Information or action | Real in the demo | Pretend | Note |\n|---|---|---|---|\n| Claims list | x | | sample data |\n| Approve or reject | x | | sample data |\n| Sign in | x | | uses the client's real accounts |\n";
+        let prd = "# PRD: Orders demo\n\nStatus: Approved\n\n## 4. Stories\n\n### S1. Open the orders list\n\nAcceptance criteria:\n- [ ] The list shows 20 sample orders with number, customer, status and days open.\n\n### S2. Approve or reject a order\n\nAcceptance criteria:\n- [ ] A manager can approve or reject a submitted order, and an officer cannot.\n- [ ] The order's status and history update on every screen that shows it.\n\n### S3. Sign in with the client's company account\n\nAcceptance criteria:\n- [ ] The user signs in through the client's real single sign-on.\n\n## 5. Scope\n\n### Later\n- Export\n\n## 6. Real or pretend\n\n| Information or action | Real in the demo | Pretend | Note |\n|---|---|---|---|\n| Orders list | x | | sample data |\n| Approve or reject | x | | sample data |\n| Sign in | x | | uses the client's real accounts |\n";
         let plan = plan_turn(&ClaudeRuntime, prd, None, &dir).unwrap();
         println!("{plan:#?}");
         assert_eq!(plan.steps.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(), ["S1", "S2", "S3"]);
@@ -551,7 +551,7 @@ mod tests {
         assert!(opening.prd.is_none());
         assert!(opening.message.contains('?'));
 
-        let full = "Demo: quarterly review with Acme ops on 20 Nov.\nProblem: they cannot see where a claim is stuck.\nUsers: claims officer finds stuck claims; manager sees totals.\nSteps:\n1. Open the claims list\n2. Filter by status\n3. Open one claim and see its history\nData: claim number, member name, status, amount, days open.\nReal or pretend: list and filter must work; history can be pretend.\nLater: export to Excel.\nPromises: none.\nLanguage: English only, no branding.\nThat is everything, please write the PRD now.";
+        let full = "Demo: quarterly review with Acme ops on 20 Nov.\nProblem: they cannot see where a order is stuck.\nUsers: support agent finds stuck orders; manager sees totals.\nSteps:\n1. Open the orders list\n2. Filter by status\n3. Open one order and see its history\nData: order number, customer name, status, amount, days open.\nReal or pretend: list and filter must work; history can be pretend.\nLater: export to Excel.\nPromises: none.\nLanguage: English only, no branding.\nThat is everything, please write the PRD now.";
         let reply = interview_turn(
             &runtime,
             &request(vec![Turn { from: Speaker::User, text: full.into() }]),

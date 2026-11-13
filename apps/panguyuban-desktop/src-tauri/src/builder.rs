@@ -201,7 +201,7 @@ mod tests {
 
     #[test]
     fn folder_names_cannot_leave_the_projects_folder() {
-        assert_eq!(folder_name("Claims Tracking Demo", "p1abc"), "claims-tracking-demo-p1abc");
+        assert_eq!(folder_name("Orders Tracking Demo", "p1abc"), "orders-tracking-demo-p1abc");
         assert_eq!(folder_name("../../etc", "../x"), "etc-x");
         assert_eq!(folder_name("///", ""), "prototype");
         assert!(!folder_name("a/b\\c..d", "id").contains(['/', '\\', '.']));
