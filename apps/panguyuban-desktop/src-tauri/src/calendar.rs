@@ -109,7 +109,7 @@ mod tests {
             join_url(&[None, s("Room 3"), s("Join: <https://meet.google.com/abc-defg-hij>\nDial-in ...")]),
             s("https://meet.google.com/abc-defg-hij")
         );
-        assert_eq!(join_url(&[s("https://rey.zoom.us/j/123?pwd=x")]), s("https://rey.zoom.us/j/123?pwd=x"));
+        assert_eq!(join_url(&[s("https://acme.zoom.us/j/123?pwd=x")]), s("https://acme.zoom.us/j/123?pwd=x"));
         assert_eq!(join_url(&[s("https://example.com/agenda"), s("Room 3")]), None);
         assert_eq!(join_url(&[s("http://meet.google.com/insecure")]), None);
     }

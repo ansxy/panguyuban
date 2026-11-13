@@ -407,7 +407,7 @@ const DEMO_AGENTS: AgentSession[] = [
     ],
   },
   {
-    harness: "claude", session_id: "demo-2", pid: 2, cwd: "~/project/rey-ehr-be", name: "rey-ehr-be",
+    harness: "claude", session_id: "demo-2", pid: 2, cwd: "~/project/billing-api", name: "billing-api",
     status: "busy", started_ms: minutesAgo(130), status_since_ms: minutesAgo(1), model: "claude-sonnet-5-5",
     input_tokens: 1_081_077, output_tokens: 41_245, subagents: [],
   },

@@ -940,7 +940,7 @@ export function lockedDesign(html: string): string {
 }
 
 export const SETUP_STEPS = [
-  "Create the project from the REY template",
+  "Create the project from the project template",
   "Add made-up sample data",
   "Start the preview",
   "Run the standards checks",
@@ -949,7 +949,7 @@ export const SETUP_STEPS = [
 export function finishSetup(p: Project): Project {
   if (p.stage !== "setup") return p;
   let next: Project = { ...p, stage: "build", checksPassing: true };
-  next = record(next, "build", "Project set up from the REY template. Standards checks passing.");
+  next = record(next, "build", "Project set up from the project template. Standards checks passing.");
   const first = currentStory(next);
   return say(next, "agent", `Ready. Next step: ${first?.id} ${first?.title}.`);
 }

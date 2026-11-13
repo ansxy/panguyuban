@@ -4,12 +4,12 @@ Skills that govern how code is written: project structure, design patterns, nami
 database design, testing. The user never picks or sees these. The build agent applies
 them while working on a story from the approved `prd.md`.
 
-Expected here (not copied in yet, they live in the `rey-nextjs` plugin today):
+Expected here (not written yet):
 
-- `rey-nextjs-app` — scaffold and overall conventions
-- `rey-db-design` — tables, normalization, migrations
-- `rey-nextjs-module` — backend feature layers (repository + Impl, service + Impl, ...)
-- `rey-nextjs-frontend` — pages, components, design system, translations
-- `rey-nextjs-unit-test` — tests and the coverage gate
+- app scaffold — project structure and overall conventions
+- database design — tables, normalization, migrations
+- backend modules — feature layers (repository + Impl, service + Impl, ...)
+- frontend — pages, components, design system, translations
+- unit tests — tests and the coverage gate
 
 Add a skill here when a coding rule should apply to every prototype.
