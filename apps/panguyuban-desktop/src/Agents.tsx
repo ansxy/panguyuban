@@ -117,6 +117,9 @@ export function AgentsView(props: {
   );
   const visible = sorted.filter((s) => filter === "all" || s.status === filter);
   const active = visible.find((s) => s.session_id === selectedId) ?? visible[0];
+  const groups = (["waiting", "busy", "idle"] as const)
+    .map((status) => ({ status, items: visible.filter((s) => s.status === status) }))
+    .filter((g) => g.items.length > 0);
   const count = (st: AgentStatus) => sessions.filter((s) => s.status === st).length;
 
   return (
@@ -128,10 +131,8 @@ export function AgentsView(props: {
         </div>
         <div className="pane-header">
           <h1>Agents</h1>
-          <span className="chip chip--instrument">Live · {sessions.length}</span>
+          <span className="measured">{sessions.length}</span>
         </div>
-
-        <UsageMeters usage={usage} sessions={sessions} now={now} />
 
         <FilterTabs
           label="Agent status filter"
@@ -154,54 +155,54 @@ export function AgentsView(props: {
               : "No sessions match this filter."}
           </p>
         ) : (
-          <ul className="record-list" aria-label="Agent sessions">
-            {visible.map((s) => (
-              <li
-                key={s.session_id}
-                className="record-item agent-item"
-                data-selected={s.session_id === active?.session_id ? "true" : "false"}
-                data-status={s.status}
-              >
-                <button
-                  type="button"
-                  className="agent-row"
-                  aria-current={s.session_id === active?.session_id ? "true" : undefined}
-                  onClick={() => setSelectedId(s.session_id)}
-                >
-                  <span className="record-top">
-                    <StatusPill status={s.status} since={s.status_since_ms} now={now} />
-                    <span className={`harness-tag harness-tag--${s.harness}`}>
-                      {s.harness === "claude" ? "claude" : "agy"}
-                    </span>
-                  </span>
-                  <span className="record-title">{s.name}</span>
-                  <span className="agent-meta measured">
-                    {[`↑${compact(s.input_tokens)} ↓${compact(s.output_tokens)}`, shortModel(s.model), shortPath(s.cwd)]
-                      .filter(Boolean)
-                      .join(" · ")}
-                  </span>
-                  {s.subagents.length > 0 && (
-                    <span className="agent-subs">
-                      {s.subagents.map((a) => (
-                        <span key={a.id} className="agent-sub" data-finished={a.finished || undefined}>
-                          <span aria-hidden="true">└ {a.finished ? "✓" : "●"}</span>
-                          <span className="agent-sub-desc">{a.description}</span>
-                          <span className="measured">
-                            {duration((a.finished ? a.last_active_ms : now) - a.started_ms)}
+          groups.map((group) => (
+            <section key={group.status} className="ticket-group" aria-label={`${STATUS[group.status].label} sessions`}>
+              <div className="ticket-group-head">
+                <h2>{STATUS[group.status].label}</h2>
+                <span className="measured">{group.items.length}</span>
+              </div>
+              <ul className="ticket-rows">
+                {group.items.map((s) => {
+                  const selected = s.session_id === active?.session_id;
+                  const running = s.subagents.filter((a) => !a.finished).length;
+                  return (
+                    <li key={s.session_id}>
+                      <button
+                        type="button"
+                        className="ticket-row"
+                        data-selected={selected ? "true" : "false"}
+                        aria-current={selected ? "true" : undefined}
+                        onClick={() => setSelectedId(s.session_id)}
+                      >
+                        <span className="ticket-row-top">
+                          <span className="agents-name">{s.name}</span>
+                          <span className="agents-since" data-status={s.status}>
+                            {duration(now - s.status_since_ms)}
                           </span>
-                          <span className="visually-hidden">{a.finished ? "finished" : "running"}</span>
                         </span>
-                      ))}
-                    </span>
-                  )}
-                </button>
-              </li>
-            ))}
-          </ul>
+                        <span className="agents-meta">
+                          <span>{s.harness === "claude" ? "Claude" : "Antigravity"}</span>
+                          {shortModel(s.model) && <span>{shortModel(s.model)}</span>}
+                          <span className="agents-meta-path">{shortPath(s.cwd)}</span>
+                        </span>
+                        {running > 0 && (
+                          <span className="agents-running">
+                            {running} {running === 1 ? "subagent" : "subagents"} running
+                          </span>
+                        )}
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            </section>
+          ))
         )}
+
+        <UsageMeters usage={usage} sessions={sessions} now={now} />
       </section>
 
-      <section className="pane pane--detail" aria-label="Selected agent session">
+      <section className="pane pane--detail ticket-detail" aria-label="Selected agent session">
         {active ? (
           <AgentDetail key={active.session_id} session={active} now={now} focusButton={props.focusButton} onEnded={props.agents.refresh} />
         ) : (
@@ -294,74 +295,12 @@ function AgentDetail({
 
   return (
     <>
-      <div className="pane-header">
-        <div>
-          <span className="measured-ink">
-            {s.harness === "claude" ? "Claude Code" : "Antigravity"} · pid {s.pid}
-          </span>
-          <h2>{s.name}</h2>
-        </div>
-        <div className="pane-tools">
-          <StatusPill status={s.status} since={s.status_since_ms} now={now} />
-          {focusButton}
-        </div>
-      </div>
-
-      <div className="reading-row" aria-label="Session readings">
-        <div className="reading-cell">
-          <span className="reading-label">Running for</span>
-          <span className="reading-value">{duration(now - s.started_ms)}</span>
-        </div>
-        <div className="reading-cell">
-          <span className="reading-label">Tokens in / out</span>
-          <span className="reading-value">
-            {compact(s.input_tokens)} / {compact(s.output_tokens)}
-          </span>
-        </div>
-        <div className="reading-cell">
-          <span className="reading-label">Model</span>
-          <span className="reading-value">{shortModel(s.model) || "—"}</span>
-        </div>
-      </div>
-
-      <dl className="agent-facts">
-        <dt>Folder</dt>
-        <dd className="measured">{s.cwd}</dd>
-        <dt>Session</dt>
-        <dd className="measured">{s.session_id}</dd>
-        <dt>Started</dt>
-        <dd>{new Date(s.started_ms).toLocaleString()}</dd>
-      </dl>
-
-      <div className="inspector-card">
-        <div className="inspector-section">
-          <h3>Subagents</h3>
-          {s.subagents.length === 0 ? (
-            <p className="agent-empty">No subagents running or finished in the last 5 minutes.</p>
-          ) : (
-            <ul className="agent-sub-table">
-              {s.subagents.map((a) => (
-                <li key={a.id} data-finished={a.finished || undefined}>
-                  <span className="agent-sub-state">{a.finished ? "✓ Done" : "● Running"}</span>
-                  <span className="agent-sub-desc" title={`${a.agent_type}: ${a.description}`}>
-                    {a.description}
-                    <span className="nav-hint"> {a.agent_type}</span>
-                  </span>
-                  <span className="measured">
-                    {duration((a.finished ? a.last_active_ms : now) - a.started_ms)}
-                  </span>
-                  <span className="measured">
-                    ↑{compact(a.input_tokens)} ↓{compact(a.output_tokens)}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      </div>
-
-      <div className="action-bar">
-        <div className="action-group">
+      <div className="agents-band" data-status={s.status}>
+        <p className="agents-band-status">
+          <span className="agents-band-label">{STATUS[s.status].label}</span>
+          <span className="agents-band-for">for {duration(now - s.status_since_ms)}</span>
+        </p>
+        <div className="agents-band-actions">
           <button
             type="button"
             className="btn btn--primary"
@@ -407,24 +346,71 @@ function AgentDetail({
             </button>
           )}
         </div>
-        <span className="measured" role="status">
-          {note}
-        </span>
       </div>
-    </>
-  );
-}
-
-function StatusPill({ status, since, now }: { status: AgentStatus; since: number; now: number }) {
-  const st = STATUS[status];
-  return (
-    <span className={`status-pill status-pill--${status}`}>
-      <span className="status-glyph" aria-hidden="true">
-        {st.glyph}
+      <span className="measured" role="status">
+        {note}
       </span>
-      {st.label}
-      <span className="measured"> {duration(now - since)}</span>
-    </span>
+
+      <div className="ticket-head">
+        <span className="measured-ink">{shortPath(s.cwd)}</span>
+        <div className="pane-tools">{focusButton}</div>
+      </div>
+      <h2 className="ticket-title">{s.name}</h2>
+
+      <dl className="agents-facts" aria-label="Session facts">
+        <div>
+          <dt>Harness</dt>
+          <dd>{s.harness === "claude" ? "Claude Code" : "Antigravity"}</dd>
+        </div>
+        <div>
+          <dt>Model</dt>
+          <dd>{shortModel(s.model) || "Unknown"}</dd>
+        </div>
+        <div>
+          <dt>Running for</dt>
+          <dd>{duration(now - s.started_ms)}</dd>
+        </div>
+        <div>
+          <dt>Tokens in</dt>
+          <dd>{compact(s.input_tokens)}</dd>
+        </div>
+        <div>
+          <dt>Tokens out</dt>
+          <dd>{compact(s.output_tokens)}</dd>
+        </div>
+        <div>
+          <dt>Session id</dt>
+          <dd className="agents-mono">{s.session_id}</dd>
+        </div>
+        <div className="agents-facts-wide">
+          <dt>Folder</dt>
+          <dd className="agents-mono">{s.cwd}</dd>
+        </div>
+      </dl>
+
+      <section className="agents-subs" aria-label="Subagents">
+        <h3>Subagents</h3>
+        {s.subagents.length === 0 ? (
+          <p className="agent-empty">No subagents running or finished in the last 5 minutes.</p>
+        ) : (
+          <ul>
+            {s.subagents.map((a) => (
+              <li key={a.id} data-finished={a.finished || undefined}>
+                <span className="agents-sub-state">{a.finished ? "Done" : "Running"}</span>
+                <span className="agents-sub-desc" title={`${a.agent_type}: ${a.description}`}>
+                  {a.description}
+                </span>
+                <span className="agents-sub-type">{a.agent_type}</span>
+                <span className="measured">{duration((a.finished ? a.last_active_ms : now) - a.started_ms)}</span>
+                <span className="measured">
+                  in {compact(a.input_tokens)}, out {compact(a.output_tokens)}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+    </>
   );
 }
 
@@ -486,10 +472,24 @@ function UsageMeters({
         <>
           <Meter label="5-hour window" window={report.five_hour} limit={preset.fiveHour} resetAfterMs={5 * 3600e3} now={now} />
           <Meter label="Week" window={report.week} limit={preset.week} resetAfterMs={7 * 24 * 3600e3} now={now} />
-          <p className="usage-today measured">
-            Today {compact(report.today.effective)} · ↑{compact(report.today.input + report.today.cache_write)} ↓
-            {compact(report.today.output)} · cache {compact(report.today.cache_read)}
-          </p>
+          <dl className="usage-today">
+            <div>
+              <dt>Today</dt>
+              <dd>{compact(report.today.effective)}</dd>
+            </div>
+            <div>
+              <dt>In</dt>
+              <dd>{compact(report.today.input + report.today.cache_write)}</dd>
+            </div>
+            <div>
+              <dt>Out</dt>
+              <dd>{compact(report.today.output)}</dd>
+            </div>
+            <div>
+              <dt>Cache read</dt>
+              <dd>{compact(report.today.cache_read)}</dd>
+            </div>
+          </dl>
         </>
       ) : (
         <p className="agent-empty">Loading usage…</p>
@@ -505,10 +505,8 @@ function Meter(props: { label: string; window: TokenWindow; limit: number; reset
   return (
     <div className="meter">
       <div className="meter-label">
-        <span>
-          {props.label}
-          {resetIn !== null && resetIn > 0 && <span className="nav-hint"> · resets in {duration(resetIn)}</span>}
-        </span>
+        <span>{props.label}</span>
+        {resetIn !== null && resetIn > 0 && <span className="meter-reset">resets in {duration(resetIn)}</span>}
         <span className="measured">{pct}%</span>
       </div>
       <div
@@ -518,13 +516,10 @@ function Meter(props: { label: string; window: TokenWindow; limit: number; reset
         aria-valuemin={0}
         aria-valuemax={100}
         aria-valuenow={pct}
-        aria-valuetext={`${pct}% · ${compact(props.window.effective)} of ${compact(props.limit)}`}
+        aria-valuetext={`${pct}% used, ${compact(props.window.effective)} of ${compact(props.limit)}`}
       >
-        <span className="meter-fill" data-level={level} style={{ width: `${Math.max(pct, 1)}%` }} />
+        <span className="meter-fill" data-level={level} style={{ transform: `scaleX(${pct / 100})` }} />
       </div>
-      <span className="meter-sub measured">
-        {compact(props.window.effective)} / {compact(props.limit)}
-      </span>
     </div>
   );
 }

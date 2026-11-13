@@ -287,7 +287,7 @@ impl DesktopController {
     ) -> Result<DashboardPayload, CoreError> {
         if self.has_live_providers() {
             let svc = self.build_workflow_service()?;
-            svc.merge_and_complete(repo, pr_number, MergeMethod::Squash, ticket_key)
+            svc.merge_and_complete(repo, pr_number, MergeMethod::MergeCommit, ticket_key)
                 .await?;
         }
         self.merge_cached_pr_and_close_ticket(repo, pr_number, ticket_key)
@@ -337,7 +337,7 @@ impl DesktopController {
         if let Some(key) = ticket_key {
             let _ = self.transition_cached_ticket(key, TicketState::Done)?;
         }
-        let _ = MergeMethod::Squash;
+        let _ = MergeMethod::MergeCommit;
         self.get_dashboard_payload()
     }
 
@@ -607,6 +607,14 @@ async fn builder_agents() -> Result<Vec<builder::HarnessStatus>, String> {
         .map_err(|e| e.to_string())
 }
 
+/// Every model an agent tool offers, for the builder's model picker.
+#[tauri::command]
+async fn builder_models(harness: String) -> Result<Vec<builder::ModelOption>, String> {
+    tokio::task::spawn_blocking(move || builder::models_for(&harness))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 /// One PRD interview turn. The agent process runs off the async runtime's worker threads.
 #[tauri::command]
 async fn builder_interview_turn(
@@ -762,6 +770,7 @@ pub fn run() {
             import_calendar,
             open_meeting,
             builder_agents,
+            builder_models,
             builder_interview_turn,
             builder_plan,
             builder_design,

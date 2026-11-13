@@ -954,14 +954,43 @@ export function finishSetup(p: Project): Project {
   return say(next, "agent", `Ready. Next step: ${first?.id} ${first?.title}.`);
 }
 
+const MODELS_KEY = "panguyuban.agentModels";
+
+function loadAgentModels(): Record<string, string> {
+  try {
+    return JSON.parse(localStorage.getItem(MODELS_KEY) ?? "{}") ?? {};
+  } catch {
+    return {};
+  }
+}
+
+let agentModels = loadAgentModels();
+
+/** The model chosen for this agent in the app, or null to use its default. */
+export function agentModel(id: string): string | null {
+  return agentModels[id] ?? null;
+}
+
+export function setAgentModel(id: string, model: string | null) {
+  const { [id]: _old, ...rest } = agentModels;
+  agentModels = model ? { ...rest, [id]: model } : rest;
+  try {
+    localStorage.setItem(MODELS_KEY, JSON.stringify(agentModels));
+  } catch {
+    // Not saved; the choice still holds until the app closes.
+  }
+}
+
 export function agentById(id: string | null): AgentDef | null {
-  return AGENTS.find((a) => a.id === id) ?? null;
+  const a = AGENTS.find((a) => a.id === id);
+  return a ? { ...a, model: agentModel(a.id) ?? a.model } : null;
 }
 
 /** What the orchestrator would pick: hard steps to the lead, small ones to the first worker. */
 export function routedAgent(story: Story): AgentDef {
   const tier: Tier = story.size === "hard" ? "lead" : "worker";
-  return AGENTS.find((a) => a.tier === tier) ?? AGENTS[0];
+  const a = AGENTS.find((a) => a.tier === tier) ?? AGENTS[0];
+  return agentById(a.id) ?? a;
 }
 
 /** The agent that will build this step, and whether a person chose it. */

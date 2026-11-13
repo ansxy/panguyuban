@@ -14,6 +14,8 @@ const INFO_POLL_MS = 1_500;
  */
 export function TerminalView(props: {
   cwd: string;
+  /** A command typed into the shell once, when it opens. */
+  run?: string;
   focused: boolean;
   onFocus: () => void;
   /** The shell's current folder, so the space can follow it. */
@@ -26,6 +28,7 @@ export function TerminalView(props: {
   const [id, setId] = useState<number | null>(null);
   const [info, setInfo] = useState<TermInfo | null>(null);
   // The read loop and poll outlive renders; always call the latest handlers.
+  const ranRef = useRef(false);
   const onCloseRef = useRef(props.onClose);
   onCloseRef.current = props.onClose;
   const onCwdRef = useRef(props.onCwd);
@@ -65,6 +68,10 @@ export function TerminalView(props: {
       }
       if (disposed) return void termClose(opened);
       setId(opened);
+      if (props.run && !ranRef.current) {
+        ranRef.current = true;
+        termWrite(opened, props.run + "\r");
+      }
       for (;;) {
         const chunk = await termRead(opened).catch(() => new ArrayBuffer(0));
         if (disposed) return;

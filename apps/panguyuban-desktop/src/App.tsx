@@ -11,6 +11,7 @@ import {
   PlaneProject,
   PullRequest,
   saveWorkspaceConfig,
+  spaceStatus,
   startTicketBranch,
   syncOne,
   syncProviders,
@@ -24,7 +25,7 @@ import { FEATURES, type FeatureKey, useFeatures } from "./features";
 import { SidebarSpaces, TerminalStages, useSpaces } from "./Spaces";
 import { FolderPanel, PanelMode } from "./FolderPanel";
 import { RequestsView, useRequests } from "./Requests";
-import { OverviewView } from "./Overview";
+import { OverviewView, withSiblingFolders } from "./Overview";
 import { THEMES, applyTheme, savedTheme } from "./theme";
 
 type SectionKey = "overview" | "tickets" | "git" | "agents" | "builder" | "requests" | "terminal" | "settings";
@@ -36,6 +37,57 @@ function formatCiState(pr: PullRequest): string {
     return `${pr.ci_state.Passing.passed} / ${pr.ci_state.Passing.total} pass`;
   }
   return `${pr.ci_state.Failing.failed} / ${pr.ci_state.Failing.total} fail`;
+}
+
+/** Ticket list order, and the five steps of the progress track (Cancelled sits outside it). */
+const TICKET_GROUPS = [
+  { state: "InProgress", label: "In progress" },
+  { state: "InReview", label: "In review" },
+  { state: "Todo", label: "Todo" },
+  { state: "Backlog", label: "Backlog" },
+  { state: "Done", label: "Done" },
+  { state: "Cancelled", label: "Cancelled" },
+];
+const TICKET_STEPS = [
+  { state: "Backlog", label: "Backlog" },
+  { state: "Todo", label: "Todo" },
+  { state: "InProgress", label: "In progress" },
+  { state: "InReview", label: "In review" },
+  { state: "Done", label: "Done" },
+];
+
+/** Pull request list order. */
+const PR_GROUPS = [
+  { state: "ChangesRequested", label: "Changes requested" },
+  { state: "ReviewRequired", label: "Review required" },
+  { state: "Approved", label: "Approved" },
+];
+
+type GateOutcome = "ok" | "bad" | "pending";
+
+/** The review and checks gates of a pull request, as outcome plus the words shown. */
+function prGates(pr: PullRequest): {
+  review: { outcome: GateOutcome; value: string };
+  checks: { outcome: GateOutcome; value: string };
+} {
+  const review =
+    pr.review_state === "Approved"
+      ? { outcome: "ok" as const, value: "Approved" }
+      : pr.review_state === "ChangesRequested"
+        ? { outcome: "bad" as const, value: "Changes requested" }
+        : {
+            outcome: "pending" as const,
+            value: pr.review_requested ? "Waiting for you" : "Waiting for review",
+          };
+  const outcome: GateOutcome =
+    pr.ci_state === "Pending"
+      ? "pending"
+      : "Failing" in pr.ci_state
+        ? "bad"
+        : pr.ci_state.Passing.passed === pr.ci_state.Passing.total
+          ? "ok"
+          : "pending";
+  return { review, checks: { outcome, value: formatCiState(pr) } };
 }
 
 /** "InProgress" -> "In progress", for states printed as the API stores them. */
@@ -211,6 +263,40 @@ export function App(): React.JSX.Element {
   const linkedPrForTicket = activeTicket
     ? prs.find((p) => p.linked_ticket_key === activeTicket.key)
     : undefined;
+  const ticketGroups = TICKET_GROUPS.map((g) => ({
+    ...g,
+    items: filteredTickets.filter((t) => t.state === g.state),
+  })).filter((g) => g.items.length > 0);
+  const prGroups = PR_GROUPS.map((g) => ({
+    ...g,
+    items: filteredPrs.filter((p) => p.review_state === g.state),
+  })).filter((g) => g.items.length > 0);
+  const gates = activePr ? prGates(activePr) : undefined;
+  const mergeBlock = !activePr
+    ? undefined
+    : !activePr.mergeable
+      ? "GitHub reports this PR can't be merged yet"
+      : activePr.ci_state !== "Pending" && "Failing" in activePr.ci_state
+        ? "Checks are failing"
+        : activePr.review_state === "ChangesRequested"
+          ? "Changes were requested"
+          : undefined;
+  const linkedKey = activePr?.linked_ticket_key ?? undefined;
+  const stepIndex = TICKET_STEPS.findIndex((s) => s.state === activeTicket?.state);
+  const ciFailing =
+    !!linkedPrForTicket &&
+    linkedPrForTicket.ci_state !== "Pending" &&
+    "Failing" in linkedPrForTicket.ci_state;
+  const updatedDate = activeTicket?.updated_at ? new Date(activeTicket.updated_at) : null;
+  const updatedAt =
+    updatedDate && !Number.isNaN(updatedDate.getTime())
+      ? updatedDate.toLocaleString(undefined, {
+          day: "numeric",
+          month: "short",
+          hour: "2-digit",
+          minute: "2-digit",
+        })
+      : "";
 
   function handleMenuSelect(nextSection: SectionKey, view?: PrView): void {
     setSection(nextSection);
@@ -285,6 +371,39 @@ export function App(): React.JSX.Element {
       setActionStatus(String(err));
     } finally {
       setBusy(false);
+    }
+  }
+
+  /** The local clone of `repo` (`owner/name`): a folder in or beside the ones already known. */
+  async function findRepoFolder(repo: string): Promise<string | null> {
+    const known = [
+      ...spaces.list.map(spaces.cwdOf),
+      shortPath(localRepoPath),
+      ...agents.sessions.map((s) => shortPath(s.cwd)),
+    ];
+    const candidates = await withSiblingFolders(known);
+    const found = (await spaceStatus(candidates)).find((s) => s.github_repo?.toLowerCase() === repo.toLowerCase());
+    return found?.path ?? null;
+  }
+
+  /** Starts `claude` in a terminal at the PR's repo, to review it or resolve its merge conflicts. */
+  async function runAgentOnPr(pr: PullRequest, kind: "review" | "conflicts"): Promise<void> {
+    try {
+      const folder = await findRepoFolder(pr.repo);
+      if (!folder) {
+        setActionStatus(`No local clone of ${pr.repo} found. Open it in a terminal once, then try again.`);
+        return;
+      }
+      const n = pr.number;
+      const where = `#${n} in ${pr.repo} (${pr.source_branch} into ${pr.target_branch})`;
+      const prompt =
+        kind === "review"
+          ? `Review pull request ${where}. Read it with \`gh pr view ${n} --repo ${pr.repo}\` and \`gh pr diff ${n} --repo ${pr.repo}\`. List bugs, risky changes and missing tests, most severe first, each with file and line. Do not change any files and do not post anything to GitHub unless I ask.`
+          : `Pull request ${where} cannot be merged because of conflicts. If this working tree has uncommitted changes, stop and tell me first. Otherwise fetch origin, check out ${pr.source_branch}, merge origin/${pr.target_branch} into it and resolve the conflicts, keeping the intent of both sides. Run the project's checks, then show me the resolution and wait for my go-ahead before committing or pushing.`;
+      spaces.runIn(folder, `claude '${prompt.replace(/'/g, "'\\''")}'`);
+      setSection("terminal");
+    } catch (err) {
+      setActionStatus(String(err));
     }
   }
 
@@ -519,7 +638,6 @@ export function App(): React.JSX.Element {
             <NavItem
               icon="settings"
               label="Settings"
-              hint="Plane & GitHub"
               current={section === "settings"}
               collapsed={layout.sidebarCollapsed}
               onSelect={() => handleMenuSelect("settings")}
@@ -715,83 +833,115 @@ export function App(): React.JSX.Element {
                   />
                 </div>
 
-                <ul className="record-list" aria-label="Plane tickets">
-                  {filteredTickets.map((ticket) => (
-                    <li
-                      key={ticket.key}
-                      className="record-item"
-                      data-selected={
-                        ticket.key === activeTicket.key ? "true" : "false"
-                      }
-                    >
-                      <div className="record-top">
-                        <button
-                          type="button"
-                          className="record-select-btn"
-                          onClick={() => setSelectedTicketKey(ticket.key)}
-                        >
-                          {ticket.key}
-                        </button>
-                        <span className={stateChip(ticket.state)}>{humanize(ticket.state)}</span>
-                      </div>
-                      <div className="record-title">{ticket.title}</div>
-                      <div className="record-meta">
-                        <span className="person-tag">
-                          {ticket.assignee ?? "Unassigned"}
-                        </span>
-                        <span className="measured">
-                          {ticket.priority ?? "normal"}
-                        </span>
-                      </div>
-                    </li>
-                  ))}
-                  {filteredTickets.length === 0 && (
-                    <li className="record-item record-meta">No tickets match this filter</li>
-                  )}
-                </ul>
+                {ticketGroups.map((group) => (
+                  <section key={group.state} className="ticket-group" aria-label={`${group.label} tickets`}>
+                    <div className="ticket-group-head">
+                      <h2>{group.label}</h2>
+                      <span className="measured">{group.items.length}</span>
+                    </div>
+                    <ul className="ticket-rows">
+                      {group.items.map((ticket) => {
+                        const selected = ticket.key === activeTicket.key;
+                        const priority = ticket.priority?.toLowerCase();
+                        return (
+                          <li key={ticket.key}>
+                            <button
+                              type="button"
+                              className="ticket-row"
+                              data-selected={selected ? "true" : "false"}
+                              aria-current={selected ? "true" : undefined}
+                              onClick={() => setSelectedTicketKey(ticket.key)}
+                            >
+                              <span className="ticket-row-top">
+                                <span className="ticket-row-key">{ticket.key}</span>
+                                {(priority === "urgent" || priority === "high") && (
+                                  <span className="ticket-row-priority" data-priority={priority}>
+                                    {humanize(priority)}
+                                  </span>
+                                )}
+                              </span>
+                              <span className="ticket-row-title">{ticket.title}</span>
+                            </button>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </section>
+                ))}
+                {filteredTickets.length === 0 && (
+                  <p className="ticket-empty">No tickets match this filter</p>
+                )}
               </section>
 
               <section
-                className="pane pane--detail"
+                className="pane pane--detail ticket-detail"
                 aria-label="Selected Plane ticket inspector"
               >
-                <div className="pane-header">
-                  <div>
-                    <span className="measured-ink">{activeTicket.key}</span>
-                    <h2>{activeTicket.title}</h2>
-                  </div>
+                <div className="ticket-head">
+                  <span className="measured-ink">{activeTicket.key}</span>
                   <div className="pane-tools">
-                    <span className="chip chip--person">
-                      Assigned: {activeTicket.assignee ?? "Unassigned"}
-                    </span>
+                    {activeTicket.url && (
+                      <a href={activeTicket.url} target="_blank" rel="noreferrer" className="btn">
+                        Open in Plane
+                      </a>
+                    )}
                     <FocusButton layout={layout} setLayout={setLayout} />
                   </div>
                 </div>
+                <h2 className="ticket-title">{activeTicket.title}</h2>
 
-                <TicketDescription
-                  text={activeTicket.description}
-                  ticketUrl={activeTicket.url}
-                />
+                <ol className="ticket-track" aria-label="Ticket progress">
+                  {TICKET_STEPS.map((step, idx) => (
+                    <li
+                      key={step.state}
+                      data-step={idx < stepIndex ? "past" : idx === stepIndex ? "current" : "later"}
+                      aria-current={idx === stepIndex ? "step" : undefined}
+                    >
+                      <span>{step.label}</span>
+                      {step.state === "InReview" && linkedPrForTicket && (
+                        <span
+                          className="ticket-track-pr"
+                          data-failing={ciFailing || undefined}
+                        >
+                          #{linkedPrForTicket.number} {formatCiState(linkedPrForTicket)}
+                        </span>
+                      )}
+                    </li>
+                  ))}
+                </ol>
+                {activeTicket.state === "Cancelled" && (
+                  <p className="ticket-cancelled">Cancelled</p>
+                )}
 
-                <div className="reading-row" aria-label="Ticket linked readings">
-                  <div className="reading-cell">
-                    <span className="reading-label">State</span>
-                    <span className="reading-value">{humanize(activeTicket.state)}</span>
-                  </div>
-                  <div className="reading-cell">
-                    <span className="reading-label">Linked pull request</span>
-                    <span className="reading-value">
-                      {linkedPrForTicket ? `#${linkedPrForTicket.number}` : "None"}
-                    </span>
-                  </div>
-                  <div className="reading-cell">
-                    <span className="reading-label">Checks</span>
-                    <span className="reading-value">
-                      {linkedPrForTicket
-                        ? formatCiState(linkedPrForTicket)
-                        : "Not started"}
-                    </span>
-                  </div>
+                <div className="ticket-body">
+                  <TicketDescription
+                    text={activeTicket.description}
+                    ticketUrl={activeTicket.url}
+                  />
+                  <dl className="ticket-facts">
+                    <div>
+                      <dt>Assignee</dt>
+                      <dd>{activeTicket.assignee ?? "Unassigned"}</dd>
+                    </div>
+                    <div>
+                      <dt>Priority</dt>
+                      <dd>{activeTicket.priority ? humanize(activeTicket.priority) : "None"}</dd>
+                    </div>
+                    {updatedAt && (
+                      <div>
+                        <dt>Updated</dt>
+                        <dd>{updatedAt}</dd>
+                      </div>
+                    )}
+                    <div>
+                      <dt>Pull request</dt>
+                      <dd>
+                        {linkedPrForTicket
+                          ? `#${linkedPrForTicket.number} ${formatCiState(linkedPrForTicket)}`
+                          : "None yet"}
+                      </dd>
+                    </div>
+                  </dl>
                 </div>
 
                 <div className="action-bar">
@@ -799,18 +949,31 @@ export function App(): React.JSX.Element {
                     <button
                       type="button"
                       className="btn btn--primary"
-                      onClick={() => handleMenuSelect("git", "merge")}
-                    >
-                      Open pull requests
-                    </button>
-                    <button
-                      type="button"
-                      className="btn"
                       disabled={busy}
                       onClick={() => handleCheckoutTicketBranch(activeTicket.key)}
                     >
                       Checkout branch
                     </button>
+                    {linkedPrForTicket ? (
+                      <button
+                        type="button"
+                        className="btn"
+                        onClick={() => {
+                          setSelectedPrKey(prKey(linkedPrForTicket));
+                          handleMenuSelect("git", "all");
+                        }}
+                      >
+                        Open pull request #{linkedPrForTicket.number}
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        className="btn"
+                        onClick={() => handleMenuSelect("git", "merge")}
+                      >
+                        Open pull requests
+                      </button>
+                    )}
                   </div>
                   <span className="measured" role="status">{actionStatus}</span>
                 </div>
@@ -866,98 +1029,85 @@ export function App(): React.JSX.Element {
                   />
                 </div>
 
-                <ul className="record-list" aria-label="Pull requests">
-                  {filteredPrs.map((pr) => (
-                    <li
-                      key={prKey(pr)}
-                      className="record-item"
-                      data-selected={
-                        prKey(pr) === prKey(activePr) ? "true" : "false"
-                      }
-                    >
-                      <div className="record-top">
-                        <button
-                          type="button"
-                          className="record-select-btn"
-                          onClick={() => setSelectedPrKey(prKey(pr))}
-                        >
-                          #{pr.number}
-                        </button>
-                        <span className={stateChip(pr.review_state)}>{humanize(pr.review_state)}</span>
-                      </div>
-                      <div className="record-title">{pr.title}</div>
-                      <div className="record-meta">
-                        <span className="person-tag">{pr.author}</span>
-                        <span className="measured">{pr.repo}</span>
-                        <span className="measured">
-                          {pr.linked_ticket_key ?? "No ticket"}
-                        </span>
-                      </div>
-                    </li>
-                  ))}
-                  {filteredPrs.length === 0 && (
-                    <li className="record-item record-meta">No pull requests match this filter</li>
-                  )}
-                </ul>
+                {prGroups.map((group) => (
+                  <section key={group.state} className="ticket-group" aria-label={`${group.label} pull requests`}>
+                    <div className="ticket-group-head">
+                      <h2>{group.label}</h2>
+                      <span className="measured">{group.items.length}</span>
+                    </div>
+                    <ul className="ticket-rows">
+                      {group.items.map((pr) => {
+                        const selected = prKey(pr) === prKey(activePr);
+                        const checksFailing = pr.ci_state !== "Pending" && "Failing" in pr.ci_state;
+                        return (
+                          <li key={prKey(pr)}>
+                            <button
+                              type="button"
+                              className="ticket-row"
+                              data-selected={selected ? "true" : "false"}
+                              aria-current={selected ? "true" : undefined}
+                              onClick={() => setSelectedPrKey(prKey(pr))}
+                            >
+                              <span className="ticket-row-top">
+                                <span className="ticket-row-key">{`${pr.repo.split("/").pop()}#${pr.number}`}</span>
+                                {checksFailing ? (
+                                  <span className="ticket-row-priority" data-priority="urgent">
+                                    Checks failing
+                                  </span>
+                                ) : (
+                                  <span className="pr-row-size">
+                                    +{pr.additions} −{pr.deletions}
+                                  </span>
+                                )}
+                              </span>
+                              <span className="ticket-row-title">{pr.title}</span>
+                            </button>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </section>
+                ))}
+                {filteredPrs.length === 0 && (
+                  <p className="ticket-empty">No pull requests match this filter</p>
+                )}
               </section>
 
               <section
-                className="pane pane--detail"
+                className="pane pane--detail ticket-detail"
                 aria-label="Selected pull request inspector"
               >
-                <div className="pane-header">
-                  <div>
-                    <span className="measured-ink">
-                      {prKey(activePr)} ({activePr.source_branch} to{" "}
-                      {activePr.target_branch})
-                    </span>
-                    <h2>{activePr.title}</h2>
-                  </div>
+                <div className="ticket-head">
+                  <span className="measured-ink">{prKey(activePr)}</span>
                   <div className="pane-tools">
-                    <span className={stateChip(activePr.review_state)}>{humanize(activePr.review_state)}</span>
+                    {activePr.url && (
+                      <a href={activePr.url} target="_blank" rel="noreferrer" className="btn">
+                        Open on GitHub
+                      </a>
+                    )}
                     <FocusButton layout={layout} setLayout={setLayout} />
                   </div>
                 </div>
+                <h2 className="ticket-title">{activePr.title}</h2>
+                <p className="pr-byline">
+                  {activePr.source_branch} into {activePr.target_branch}, by {activePr.author}
+                </p>
 
-                <div className="reading-row" aria-label="Pull request summary">
-                  <div className="reading-cell">
-                    <span className="reading-label">Changes</span>
-                    <span className="reading-value">
-                      +{activePr.additions} / −{activePr.deletions}
-                    </span>
-                  </div>
-                  <div className="reading-cell">
-                    <span className="reading-label">Checks</span>
-                    <span className="reading-value">
-                      {formatCiState(activePr)}
-                    </span>
-                  </div>
-                  <div className="reading-cell">
-                    <span className="reading-label">Linked ticket</span>
-                    <span className="reading-value">
-                      {activePr.linked_ticket_key ?? "None"}
-                    </span>
-                  </div>
-                </div>
-
-                <div className="inspector-card">
-                  <div className="inspector-section">
-                    <h3>Files changed</h3>
-                    {!activeDiff ? (
-                      <div className="diff-panel">
-                        <div className="diff-line">Loading diff…</div>
-                      </div>
-                    ) : activeDiff.length === 0 ? (
-                      <div className="diff-panel">
-                        <div className="diff-line">No changes</div>
-                      </div>
-                    ) : (
-                      <DiffFiles lines={activeDiff} />
-                    )}
-                  </div>
-                </div>
-
-                <div className="action-bar">
+                <div className="pr-gates">
+                  <dl aria-label="Merge readiness">
+                    <div data-outcome={gates!.review.outcome}>
+                      <dt>Review</dt>
+                      <dd>{gates!.review.value}</dd>
+                    </div>
+                    <div data-outcome={gates!.checks.outcome}>
+                      <dt>Checks</dt>
+                      <dd>{gates!.checks.value}</dd>
+                    </div>
+                    <div data-outcome={activePr.mergeable ? "ok" : "bad"}>
+                      <dt>Conflicts</dt>
+                      <dd>{activePr.mergeable ? "None" : "Can't merge yet"}</dd>
+                    </div>
+                  </dl>
                   <div className="action-group">
                     {activePr.review_requested ? (
                       <button
@@ -988,11 +1138,24 @@ export function App(): React.JSX.Element {
                       <button
                         type="button"
                         className="btn btn--primary"
-                        disabled={busy || !activePr.mergeable}
-                        title={activePr.mergeable ? undefined : "GitHub reports this PR cannot be merged yet"}
+                        disabled={busy || !!mergeBlock}
+                        title={mergeBlock}
                         onClick={() => setConfirmMergeKey(prKey(activePr))}
                       >
-                        Squash and merge
+                        Merge
+                      </button>
+                    )}
+                    <button type="button" className="btn" disabled={busy} onClick={() => runAgentOnPr(activePr, "review")}>
+                      Review with agent
+                    </button>
+                    {!activePr.mergeable && (
+                      <button
+                        type="button"
+                        className="btn"
+                        disabled={busy}
+                        onClick={() => runAgentOnPr(activePr, "conflicts")}
+                      >
+                        Resolve conflicts with agent
                       </button>
                     )}
                     <button
@@ -1008,10 +1171,53 @@ export function App(): React.JSX.Element {
                       Checkout branch
                     </button>
                   </div>
-                  <span className="measured" role="status">
-                    {actionStatus}
-                  </span>
                 </div>
+                <span className="measured" role="status">
+                  {actionStatus}
+                </span>
+
+                <dl className="pr-facts">
+                  <div>
+                    <dt>Changes</dt>
+                    <dd className="pr-facts-num">
+                      +{activePr.additions} −{activePr.deletions}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Linked ticket</dt>
+                    <dd>
+                      {linkedKey && features.tickets && tickets.some((t) => t.key === linkedKey) ? (
+                        <button
+                          type="button"
+                          className="pr-facts-link"
+                          onClick={() => {
+                            setSelectedTicketKey(linkedKey);
+                            handleMenuSelect("tickets");
+                          }}
+                        >
+                          {linkedKey}
+                        </button>
+                      ) : (
+                        linkedKey ?? "None"
+                      )}
+                    </dd>
+                  </div>
+                </dl>
+
+                <section className="pr-files" aria-label="Files changed">
+                  <h3>Files changed</h3>
+                  {!activeDiff ? (
+                    <div className="diff-panel">
+                      <div className="diff-line">Loading diff…</div>
+                    </div>
+                  ) : activeDiff.length === 0 ? (
+                    <div className="diff-panel">
+                      <div className="diff-line">No changes</div>
+                    </div>
+                  ) : (
+                    <DiffFiles lines={activeDiff} />
+                  )}
+                </section>
               </section>
             </main>
           )}
@@ -1466,7 +1672,7 @@ type PrView = "review" | "mine" | "merge" | "all";
 function NavItem(props: {
   icon: IconName;
   label: string;
-  hint: string;
+  hint?: string;
   count?: number;
   current: boolean;
   collapsed: boolean;
@@ -1495,7 +1701,7 @@ function NavItem(props: {
         </span>
         <span className="nav-text">
           <span className="nav-label">{props.label}</span>
-          <span className="nav-hint">{props.hint}</span>
+          {props.hint && <span className="nav-hint">{props.hint}</span>}
         </span>
         {props.count !== undefined && (
           <span className="nav-count measured">{props.count}</span>

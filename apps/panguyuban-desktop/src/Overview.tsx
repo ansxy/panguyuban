@@ -476,18 +476,35 @@ function FolderPicker(props: {
 function useProjectFolders(known: string[]): string[] {
   const [found, setFound] = useState<string[]>([]);
   const ok = known.filter((f) => f.startsWith("~/"));
-  const parents = [...new Set(ok.map((f) => f.slice(0, f.lastIndexOf("/"))))].filter((p) => p !== "~");
+  const parents = parentFolders(ok);
   useEffect(() => {
     if (!window.__TAURI_INTERNALS__) return;
-    void Promise.all(
-      parents.map((p) =>
-        folderList(p)
-          .then((entries) => entries.filter((e) => e.is_dir && !e.name.startsWith(".")).map((e) => `${p}/${e.name}`))
-          .catch(() => [])
-      )
-    ).then((lists) => setFound(lists.flat()));
+    void listSubfolders(parents).then(setFound);
   }, [parents.join("\n")]);
   return [...new Set([...ok, ...found])].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
+}
+
+/** The distinct parent folders of `~/` paths, leaving out `~` itself. */
+function parentFolders(paths: string[]): string[] {
+  return [...new Set(paths.map((f) => f.slice(0, f.lastIndexOf("/"))))].filter((p) => p !== "~");
+}
+
+/** The sub-folders (no dot-folders) of each of `parents`. */
+async function listSubfolders(parents: string[]): Promise<string[]> {
+  const lists = await Promise.all(
+    parents.map((p) =>
+      folderList(p)
+        .then((entries) => entries.filter((e) => e.is_dir && !e.name.startsWith(".")).map((e) => `${p}/${e.name}`))
+        .catch(() => [])
+    )
+  );
+  return lists.flat();
+}
+
+/** `known` plus the sub-folders of their parents: where sibling projects live. */
+export async function withSiblingFolders(known: string[]): Promise<string[]> {
+  const ok = known.filter((f) => f.startsWith("~/"));
+  return [...new Set([...ok, ...(await listSubfolders(parentFolders(ok)))])];
 }
 
 const TICKET_FOLDERS_KEY = "panguyuban.ticketFolders";

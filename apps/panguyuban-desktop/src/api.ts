@@ -352,6 +352,14 @@ export async function builderAgents(): Promise<HarnessStatus[]> {
   return [];
 }
 
+/** Every model an agent tool offers. Empty outside the desktop app. */
+export async function builderModels(harness: string): Promise<{ id: string; label: string }[]> {
+  if (window.__TAURI_INTERNALS__?.invoke) {
+    return window.__TAURI_INTERNALS__.invoke<{ id: string; label: string }[]>("builder_models", { harness });
+  }
+  return [];
+}
+
 export async function builderInterviewTurn(args: InterviewTurnArgs): Promise<InterviewTurnResult> {
   if (window.__TAURI_INTERNALS__?.invoke) {
     return window.__TAURI_INTERNALS__.invoke<InterviewTurnResult>("builder_interview_turn", { args });

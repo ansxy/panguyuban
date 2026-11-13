@@ -1,18 +1,21 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState, type CSSProperties } from "react";
 import {
   builderAgents,
   builderDesign,
   builderInterviewTurn,
+  builderModels,
   builderPlan,
   builderSavePrd,
   HarnessStatus,
 } from "./api";
 import {
   agentById,
+  agentModel,
   agentFailed,
   agentFor,
   AgentDef,
   AGENTS,
+  setAgentModel,
   answeredCount,
   applyAgentReply,
   applyDesign,
@@ -84,6 +87,11 @@ export function useBuilder(enabled = true) {
 
   const [harnesses, setHarnesses] = useState<HarnessStatus[]>([]);
 
+  // Models per harness, fetched once and kept; "error" means the tool could not list them.
+  const [models, setModels] = useState<Record<string, { id: string; label: string }[] | "error">>({});
+  const asked = useRef(new Set<string>());
+  const [, bump] = useState(0);
+
   useEffect(() => saveProjects(projects), [projects]);
 
   useEffect(() => {
@@ -94,6 +102,22 @@ export function useBuilder(enabled = true) {
   }, [enabled]);
 
   const project = projects.find((p) => p.id === selectedId) ?? null;
+
+  /** Models for a harness: undefined while loading, "error" if it could not be listed. */
+  function modelsFor(harness: string) {
+    if (!asked.current.has(harness)) {
+      asked.current.add(harness);
+      builderModels(harness)
+        .then((list) => setModels((m) => ({ ...m, [harness]: list })))
+        .catch(() => setModels((m) => ({ ...m, [harness]: "error" })));
+    }
+    return models[harness];
+  }
+
+  function setModel(agentId: string, model: string | null) {
+    setAgentModel(agentId, model);
+    bump((n) => n + 1);
+  }
 
   function updateById(id: string, change: (p: Project) => Project) {
     setProjects((all) => all.map((p) => (p.id === id ? change(p) : p)));
@@ -109,10 +133,31 @@ export function useBuilder(enabled = true) {
     setSelectedId(created.id);
   }
 
-  /** Agents whose command-line tool is installed here, lead first. */
-  const liveAgents = AGENTS.filter((a) => harnesses.some((h) => h.harness === a.harness && h.available));
+  /** Removes a prototype from the app; its saved files in Documents/Panguyuban stay. */
+  function remove(id: string) {
+    const rest = projects.filter((p) => p.id !== id);
+    setProjects(rest);
+    if (selectedId === id) setSelectedId(rest[0]?.id ?? null);
+  }
 
-  return { projects, project, selectedId, select: setSelectedId, update, updateById, create, liveAgents };
+  /** Agents whose command-line tool is installed here, lead first. */
+  const liveAgents = AGENTS.filter((a) => harnesses.some((h) => h.harness === a.harness && h.available)).map(
+    (a) => agentById(a.id) ?? a
+  );
+
+  return {
+    projects,
+    project,
+    selectedId,
+    select: setSelectedId,
+    update,
+    updateById,
+    create,
+    remove,
+    liveAgents,
+    modelsFor,
+    setModel,
+  };
 }
 
 /** Prototypes with an agent turn running. Module-level so a re-mount cannot start a second one. */
@@ -211,6 +256,7 @@ export function BuilderView({ builder }: { builder: Builder }) {
       <NewPrototype
         canCancel={!!project}
         onCancel={() => setCreating(false)}
+        builder={builder}
         liveAgents={builder.liveAgents}
         onCreate={(name, client, author, description, agentId) => {
           builder.create(name, client, author, description, agentId);
@@ -228,7 +274,38 @@ export function BuilderView({ builder }: { builder: Builder }) {
   );
 }
 
+/** Which model an agent runs. "" keeps the agent's default. Per agent, not per prototype. */
+function ModelPick(props: { builder: Builder; agentId: string; className?: string }) {
+  const base = AGENTS.find((a) => a.id === props.agentId);
+  if (!base) return null;
+  const list = props.builder.modelsFor(base.harness);
+  const chosen = agentModel(base.id) ?? "";
+  return (
+    <select
+      className={`input-field ${props.className ?? ""}`}
+      aria-label={`Model for ${base.label}`}
+      value={chosen}
+      onChange={(e) => props.builder.setModel(base.id, e.target.value || null)}
+    >
+      <option value="">Default ({base.model ?? "tool default"})</option>
+      {list === undefined && <option disabled>Loading models…</option>}
+      {list === "error" && <option disabled>Could not list models</option>}
+      {Array.isArray(list) &&
+        list.map((m) => (
+          <option key={m.id} value={m.id}>
+            {m.label}
+          </option>
+        ))}
+      {/* A saved choice the tool no longer lists stays visible instead of silently resetting. */}
+      {chosen && !(Array.isArray(list) && list.some((m) => m.id === chosen)) && (
+        <option value={chosen}>{chosen}</option>
+      )}
+    </select>
+  );
+}
+
 function NewPrototype(props: {
+  builder: Builder;
   canCancel: boolean;
   onCancel: () => void;
   liveAgents: AgentDef[];
@@ -262,102 +339,135 @@ function NewPrototype(props: {
       <div className="pane-header">
         <h1 className="builder-title">New prototype</h1>
       </div>
+      <p className="builder-lead">
+        Tell me what you want to show and who it is for. If you already know the details,
+        write them below and I will only ask about what is missing. Nothing is built until
+        you approve the plan, and engineering is told that this prototype exists.
+      </p>
       <form
-        className="state-box builder-form"
+        className="settings-page"
         onSubmit={(e) => {
           e.preventDefault();
           if (ready) props.onCreate(name, client, author, description, agentId || null);
         }}
       >
-        <p className="builder-lead">
-          Tell me what you want to show and who it is for. If you already know the details,
-          write them below and I will only ask about what is missing. Nothing is built until
-          you approve the plan, and engineering is told that this prototype exists.
-        </p>
-        <label className="field-group">
-          <span className="field-label">What is it called?</span>
-          <input
-            className="input-field"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="Orders tracking demo"
-            autoFocus
-          />
-        </label>
-        <label className="field-group">
-          <span className="field-label">Which client is it for?</span>
-          <input
-            className="input-field"
-            value={client}
-            onChange={(e) => setClient(e.target.value)}
-            placeholder="Client name"
-          />
-        </label>
-        <label className="field-group">
-          <span className="field-label">Your name and team</span>
-          <input
-            className="input-field"
-            value={author}
-            onChange={(e) => setAuthor(e.target.value)}
-            placeholder="Optional"
-          />
-        </label>
-        <label className="field-group">
-          <span className="field-label">What do you want to build?</span>
-          <textarea
-            className="input-field chat-box builder-describe"
-            rows={8}
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            placeholder={"Optional. Paste what you already know, or a PRD you already have: the problem, who uses it, the steps you will show (one per line), when the demo is."}
-          />
-          <span className="field-help" role="status">
-            {fileError ??
-              (isPrd
-                ? "This is already a PRD in our format. It will be used as it is, with no interview, and you approve it before anything is built."
-                : description.trim()
-                  ? "I will work from this and only ask about what is missing."
-                  : "Leave it empty and I will ask one question at a time.")}
-          </span>
-        </label>
-        <label className="btn builder-file">
-          Load a PRD or notes from a file
-          <input
-            type="file"
-            accept=".md,.markdown,.txt,text/markdown,text/plain"
-            onChange={(e) => {
-              loadFile(e.target.files?.[0]);
-              e.target.value = "";
-            }}
-          />
-        </label>
-        <label className="field-group">
-          <span className="field-label">Who runs the interview?</span>
-          <select className="input-field" value={agentId} onChange={(e) => setPicked(e.target.value)}>
-            {props.liveAgents.map((a) => (
-              <option key={a.id} value={a.id}>
-                {a.label}
-                {a.model ? ` · ${a.model}` : ""}
-                {a.harness === "antigravity" ? " (untested)" : ""}
-              </option>
-            ))}
-            <option value="">Scripted stand-in (no agent)</option>
-          </select>
-          <span className="field-help">
-            {props.liveAgents.length
-              ? "A real agent asks the questions and writes the PRD. It cannot run commands or touch your files."
-              : "No agent was found on this machine, so the interview uses scripted questions."}
-          </span>
-        </label>
-        <div className="action-group">
-          <button type="submit" className="btn btn--primary" disabled={!ready}>
-            {isPrd ? "Use this PRD" : description.trim() ? "Start from this description" : "Start the interview"}
-          </button>
-          {props.canCancel && (
-            <button type="button" className="btn" onClick={props.onCancel}>
-              Cancel
+        <section className="settings-section">
+          <div className="settings-aside">
+            <h2>What it is</h2>
+            <p>The name in the list, and who the prototype is for.</p>
+          </div>
+          <div className="settings-body">
+            <label className="field-group">
+              <span className="field-label">What is it called?</span>
+              <input
+                className="input-field"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="Orders tracking demo"
+                autoFocus
+              />
+            </label>
+            <label className="field-group">
+              <span className="field-label">Which client is it for?</span>
+              <input
+                className="input-field"
+                value={client}
+                onChange={(e) => setClient(e.target.value)}
+                placeholder="Client name"
+              />
+            </label>
+            <label className="field-group">
+              <span className="field-label">Your name and team</span>
+              <input
+                className="input-field"
+                value={author}
+                onChange={(e) => setAuthor(e.target.value)}
+                placeholder="Optional"
+              />
+            </label>
+          </div>
+        </section>
+        <section className="settings-section">
+          <div className="settings-aside">
+            <h2>What you know</h2>
+            <p>Anything you already have. Leave it empty and the interview starts from nothing.</p>
+          </div>
+          <div className="settings-body">
+            <label className="field-group">
+              <span className="field-label">What do you want to build?</span>
+              <textarea
+                className="input-field chat-box builder-describe"
+                rows={8}
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                placeholder={"Optional. Paste what you already know, or a PRD you already have: the problem, who uses it, the steps you will show (one per line), when the demo is."}
+              />
+              <span className="field-help" role="status">
+                {fileError ??
+                  (isPrd
+                    ? "This is already a PRD in our format. It will be used as it is, with no interview, and you approve it before anything is built."
+                    : description.trim()
+                      ? "I will work from this and only ask about what is missing."
+                      : "Leave it empty and I will ask one question at a time.")}
+              </span>
+            </label>
+            <label className="btn builder-file">
+              Load a PRD or notes from a file
+              <input
+                type="file"
+                accept=".md,.markdown,.txt,text/markdown,text/plain"
+                onChange={(e) => {
+                  loadFile(e.target.files?.[0]);
+                  e.target.value = "";
+                }}
+              />
+            </label>
+          </div>
+        </section>
+        <section className="settings-section">
+          <div className="settings-aside">
+            <h2>Who interviews</h2>
+            <p>The agent that asks the questions and writes the PRD.</p>
+          </div>
+          <div className="settings-body">
+            <label className="field-group">
+              <span className="field-label">Who runs the interview?</span>
+              <select className="input-field" value={agentId} onChange={(e) => setPicked(e.target.value)}>
+                {props.liveAgents.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.label}
+                    {a.model ? `, ${a.model}` : ""}
+                    {a.harness === "antigravity" ? " (untested)" : ""}
+                  </option>
+                ))}
+                <option value="">Scripted stand-in (no agent)</option>
+              </select>
+              {agentId && (
+                <>
+                  <span className="field-label">Model</span>
+                  <ModelPick builder={props.builder} agentId={agentId} />
+                  <span className="field-help">The model applies to this agent in every prototype.</span>
+                </>
+              )}
+              <span className="field-help">
+                {props.liveAgents.length
+                  ? "A real agent asks the questions and writes the PRD. It cannot run commands or touch your files."
+                  : "No agent was found on this machine, so the interview uses scripted questions."}
+              </span>
+            </label>
+          </div>
+        </section>
+        <div className="action-bar builder-submit">
+          <div className="action-group">
+            <button type="submit" className="btn btn--primary" disabled={!ready}>
+              {isPrd ? "Use this PRD" : description.trim() ? "Start from this description" : "Start the interview"}
             </button>
-          )}
+            {props.canCancel && (
+              <button type="button" className="btn" onClick={props.onCancel}>
+                Cancel
+              </button>
+            )}
+          </div>
         </div>
       </form>
     </section>
@@ -366,17 +476,17 @@ function NewPrototype(props: {
 
 function StageRail({ project }: { project: Project }) {
   const at = stageIndex(project);
+  const stages = stagesFor(project);
   return (
-    <ol className="stage-rail" aria-label="Progress">
-      {stagesFor(project).map((s, i) => (
+    <ol className="ticket-track" aria-label="Progress" style={{ "--steps": stages.length } as CSSProperties}>
+      {stages.map((s, i) => (
         <li
           key={s.key}
-          className="stage-step"
-          data-state={i < at ? "done" : i === at ? "current" : "todo"}
+          data-step={i < at ? "past" : i === at ? "current" : "later"}
           aria-current={i === at ? "step" : undefined}
         >
           <span className="measured">{i + 1}</span>
-          {s.label}
+          <span>{s.label}</span>
         </li>
       ))}
     </ol>
@@ -407,6 +517,8 @@ function inputPlaceholder(p: Project): string {
 function SessionPane(props: { builder: Builder; project: Project; onNew: () => void }) {
   const { builder, project } = props;
   const [draft, setDraft] = useState("");
+  // Deleting cannot be undone in the app, so it takes a second click.
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
   const agentTask = useAgentTurn(builder, project);
   const agentBusy = agentTask !== null;
@@ -426,24 +538,54 @@ function SessionPane(props: { builder: Builder; project: Project; onNew: () => v
   return (
     <section className="pane pane--list builder-session" aria-label="Session">
       <div className="pane-header">
-        <select
-          className="input-field builder-picker"
-          aria-label="Prototype"
-          value={project.id}
-          onChange={(e) => builder.select(e.target.value)}
-        >
-          {builder.projects.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name} · {p.client}
-            </option>
-          ))}
-        </select>
-        <button type="button" className="btn" onClick={props.onNew}>
-          New
-        </button>
+        <h1>Prototypes</h1>
+        <div className="action-group">
+          {confirmDelete ? (
+            <>
+              <button type="button" className="btn btn--danger" onClick={() => builder.remove(project.id)}>
+                Delete {project.name}
+              </button>
+              <button type="button" className="btn" onClick={() => setConfirmDelete(false)}>
+                Cancel
+              </button>
+            </>
+          ) : (
+            <>
+              <button type="button" className="btn" onClick={() => setConfirmDelete(true)}>
+                Delete
+              </button>
+              <button type="button" className="btn" onClick={props.onNew}>
+                New
+              </button>
+            </>
+          )}
+        </div>
       </div>
 
-      <StageRail project={project} />
+      <ul className="builder-projects" aria-label="Prototypes">
+        {builder.projects.map((p) => {
+          const current = p.id === project.id;
+          return (
+            <li key={p.id}>
+              <button
+                type="button"
+                className="ticket-row"
+                data-selected={current || undefined}
+                aria-current={current || undefined}
+                onClick={() => builder.select(p.id)}
+              >
+                <span className="ticket-row-top">
+                  <span className="agents-name">{p.name}</span>
+                  <span className="builder-project-stage">
+                    {p.stage === "done" ? "Handed over" : stagesFor(p)[stageIndex(p)]?.label}
+                  </span>
+                </span>
+                <span className="ticket-row-title">For {p.client}</span>
+              </button>
+            </li>
+          );
+        })}
+      </ul>
 
       <p className="builder-standin" role="note">
         {interviewer
@@ -454,10 +596,9 @@ function SessionPane(props: { builder: Builder; project: Project; onNew: () => v
       <div className="chat-log" role="log" aria-live="polite">
         {project.messages.map((m, i) => (
           <div key={i} className="chat-msg" data-from={m.from}>
+            {/* Notes are events in the log, not a speaker: no name on them. */}
             {m.from !== "system" && (
-              <span className={m.from === "user" ? "person-tag chat-who" : "measured chat-who"}>
-                {m.from === "user" ? project.author : "agent"}
-              </span>
+              <span className="chat-who">{m.from === "user" ? "You" : (interviewer?.label ?? "Agent")}</span>
             )}
             <p className="chat-text">{m.text}</p>
           </div>
@@ -481,7 +622,7 @@ function SessionPane(props: { builder: Builder; project: Project; onNew: () => v
               </button>
               {project.stage === "plan" && (
                 <button type="button" className="btn" onClick={() => builder.update(planWithRules)}>
-                  Continue without the agent's plan
+                  Continue without the agent’s plan
                 </button>
               )}
               {project.stage === "prototype" && project.designHtml && (
@@ -515,9 +656,10 @@ function SessionPane(props: { builder: Builder; project: Project; onNew: () => v
           send();
         }}
       >
+        <div className="chat-composer">
         <textarea
-          className="input-field chat-box"
-          rows={3}
+          className="chat-box"
+          rows={2}
           value={draft}
           disabled={!!blockedReason}
           placeholder={blockedReason ?? inputPlaceholder(project)}
@@ -530,9 +672,13 @@ function SessionPane(props: { builder: Builder; project: Project; onNew: () => v
             }
           }}
         />
-        <button type="submit" className="btn" disabled={!!blockedReason || !draft.trim()}>
-          Send
-        </button>
+        <div className="chat-composer-foot">
+          <span className="chat-composer-hint">⌘ Enter to send</span>
+          <button type="submit" className="btn btn--primary" disabled={!!blockedReason || !draft.trim()}>
+            Send
+          </button>
+        </div>
+        </div>
       </form>
     </section>
   );
@@ -640,39 +786,25 @@ function InspectorPane({ builder, project }: { builder: Builder; project: Projec
   }, [project.stage, setupAt]);
 
   return (
-    <section className="pane pane--detail builder-inspector" aria-label="Prototype">
-      <div className="pane-header">
-        <FilterTabs<Tab>
-          label="Inspector"
-          value={tab}
-          onChange={setTab}
-          options={[
-            { value: "steps", label: "Steps", count: project.stories.length },
-            { value: "preview", label: "Preview", count: confirmedCount },
-            { value: "prd", label: "PRD", count: project.openQuestions.length },
-            { value: "record", label: "Record", count: project.log.length },
-          ]}
-        />
-        {project.building ? (
-          <span className={`chip ${project.checksPassing ? "chip--ok" : ""}`} role="status">
-            Standards: {project.checksPassing ? "passing" : "not run yet"}
-          </span>
-        ) : (
-          <span className="chip" role="status">
-            Prototype · made-up data
-          </span>
-        )}
+    <section className="pane pane--detail ticket-detail builder-inspector" aria-label="Prototype">
+      {/* One quiet line of text: who it is for and what it runs on. No boxes. */}
+      <div className="ticket-head builder-head">
+        <span>For {project.client}</span>
+        <div className="builder-head-tools">
+          {project.building ? (
+            <span role="status" data-ok={project.checksPassing || undefined}>
+              Standards {project.checksPassing ? "passing" : "not run yet"}
+            </span>
+          ) : (
+            <span role="status">Made-up data only</span>
+          )}
+        </div>
       </div>
+      <h2 className="ticket-title">{project.name}</h2>
 
-      <div className="builder-body">
-        {tab === "steps" && <StepsTab builder={builder} project={project} setupAt={setupAt} />}
-        {tab === "preview" && <PreviewTab project={project} />}
-        {tab === "prd" && <PrdTab builder={builder} project={project} />}
-        {tab === "record" && <RecordTab project={project} />}
-      </div>
-
-      <div className="action-bar builder-actions">
-        <div className="action-group">
+      <div className="builder-gates">
+        <StageRail project={project} />
+        <div className="builder-primary">
           {action && (
             <button
               type="button"
@@ -706,32 +838,56 @@ function InspectorPane({ builder, project }: { builder: Builder; project: Projec
           {action?.blocked && <span className="field-help">{action.blocked}</span>}
           {project.stage === "done" && <span className="chip chip--ok">Handed over</span>}
         </div>
-        <div className="action-group">
-          {canChooseBuild(project) && (
-            <button
-              type="button"
-              className="btn"
-              title="For engineers: build the real app from the PRD and the prototype, in this same prototype"
-              onClick={() => {
-                builder.update(chooseBuild);
-                setTab("steps");
-              }}
-            >
-              Build it here
-            </button>
-          )}
-          {canUndo(project) && (
-            <button type="button" className="btn" onClick={() => builder.update(undoLastStep)}>
-              Undo last step
-            </button>
-          )}
-          {project.stage !== "done" && (
-            <button type="button" className="btn" onClick={() => builder.update(askEngineer)}>
-              Ask an engineer
-            </button>
-          )}
-        </div>
       </div>
+
+      <FilterTabs<Tab>
+        label="Inspector"
+        value={tab}
+        onChange={setTab}
+        options={[
+          { value: "steps", label: "Steps", count: project.stories.length },
+          { value: "preview", label: "Preview", count: confirmedCount },
+          { value: "prd", label: "PRD", count: project.openQuestions.length },
+          { value: "record", label: "Record", count: project.log.length },
+        ]}
+      />
+
+      <div className="builder-body">
+        {tab === "steps" && <StepsTab builder={builder} project={project} setupAt={setupAt} />}
+        {tab === "preview" && <PreviewTab project={project} />}
+        {tab === "prd" && <PrdTab builder={builder} project={project} />}
+        {tab === "record" && <RecordTab project={project} />}
+      </div>
+
+      {(canChooseBuild(project) || canUndo(project) || project.stage !== "done") && (
+        <div className="action-bar builder-actions">
+          <div className="action-group">
+            {canChooseBuild(project) && (
+              <button
+                type="button"
+                className="btn"
+                title="For engineers: build the real app from the PRD and the prototype, in this same prototype"
+                onClick={() => {
+                  builder.update(chooseBuild);
+                  setTab("steps");
+                }}
+              >
+                Build it here
+              </button>
+            )}
+            {canUndo(project) && (
+              <button type="button" className="btn" onClick={() => builder.update(undoLastStep)}>
+                Undo last step
+              </button>
+            )}
+            {project.stage !== "done" && (
+              <button type="button" className="btn" onClick={() => builder.update(askEngineer)}>
+                Ask an engineer
+              </button>
+            )}
+          </div>
+        </div>
+      )}
     </section>
   );
 }
@@ -742,7 +898,7 @@ function StepsTab(props: { builder: Builder; project: Project; setupAt: number }
 
   if (project.stories.length === 0) {
     return (
-      <div className="state-box">
+      <div className="builder-empty">
         <strong>No steps yet</strong>
         <p className="builder-lead">
           The steps come from your walkthrough. Answer the interview questions and they will
@@ -755,9 +911,9 @@ function StepsTab(props: { builder: Builder; project: Project; setupAt: number }
   return (
     <>
       {project.stage === "setup" && (
-        <ul className="record-list" aria-label="Set up">
+        <ul className="builder-rows" aria-label="Set up">
           {SETUP_STEPS.map((step, i) => (
-            <li key={step} className="record-item builder-row">
+            <li key={step} className="builder-row">
               <span className={`chip ${i < props.setupAt ? "chip--ok" : ""}`}>
                 {i < props.setupAt ? "done" : i === props.setupAt ? "working" : "waiting"}
               </span>
@@ -791,10 +947,11 @@ function StepsTab(props: { builder: Builder; project: Project; setupAt: number }
         </div>
       )}
 
-      <ul className="record-list" aria-label="Steps">
+      <ul className="builder-rows" aria-label="Steps">
         {project.stories.map((story) => (
           <StoryRow
             key={story.id}
+            builder={builder}
             story={story}
             project={project}
             onAssign={(agentId) => builder.update((p) => assignStory(p, story.id, agentId))}
@@ -813,15 +970,13 @@ function StepsTab(props: { builder: Builder; project: Project; setupAt: number }
       </ul>
 
       {project.later.length > 0 && (
-        <div className="inspector-card">
-          <div className="inspector-section">
-            <span className="field-label">Later, not part of this prototype</span>
-            <ul className="builder-plain-list">
-              {project.later.map((item, i) => (
-                <li key={i}>{item}</li>
-              ))}
-            </ul>
-          </div>
+        <div className="builder-later">
+          <span className="field-label">Later, not part of this prototype</span>
+          <ul className="builder-plain-list">
+            {project.later.map((item, i) => (
+              <li key={i}>{item}</li>
+            ))}
+          </ul>
         </div>
       )}
     </>
@@ -829,6 +984,7 @@ function StepsTab(props: { builder: Builder; project: Project; setupAt: number }
 }
 
 function StoryRow(props: {
+  builder: Builder;
   story: Story;
   project: Project;
   onAssign: (agentId: string | null) => void;
@@ -875,7 +1031,7 @@ function StoryRow(props: {
   const showLines = project.building ? story.status !== "todo" : project.stage !== "interview";
 
   return (
-    <li className="record-item story-item" data-current={props.isCurrent || undefined}>
+    <li className="story-item" data-current={props.isCurrent || undefined}>
       <div className="record-top">
         <span className="measured-ink">{story.id}</span>
         <span className={`chip ${tone}`}>{label}</span>
@@ -886,20 +1042,25 @@ function StoryRow(props: {
       <div className="story-agent">
         <span className="chip">{story.size === "hard" ? "hard step" : "small step"}</span>
         {canAssign ? (
-          <select
-            className="input-field story-agent-pick"
-            aria-label={`Agent for ${story.id}`}
-            value={story.assignedTo ?? ""}
-            onChange={(e) => props.onAssign(e.target.value || null)}
-          >
-            <option value="">Auto</option>
-            {AGENTS.map((a) => (
-              <option key={a.id} value={a.id}>
-                {a.label}
-                {a.model ? ` · ${a.model}` : ""}
-              </option>
-            ))}
-          </select>
+          <>
+            <select
+              className="input-field story-agent-pick"
+              aria-label={`Agent for ${story.id}`}
+              value={story.assignedTo ?? ""}
+              onChange={(e) => props.onAssign(e.target.value || null)}
+            >
+              <option value="">Auto</option>
+              {AGENTS.map((a) => agentById(a.id) ?? a).map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.label}
+                  {a.model ? `, ${a.model}` : ""}
+                </option>
+              ))}
+            </select>
+            {story.assignedTo && (
+              <ModelPick builder={props.builder} agentId={story.assignedTo} className="story-agent-pick" />
+            )}
+          </>
         ) : (
           <span className="chip chip--instrument">
             {builtBy ? `built by ${builtBy.label}` : planned.agent.label}
@@ -978,7 +1139,7 @@ function PreviewTab({ project }: { project: Project }) {
     );
   }
   return (
-    <div className="state-box preview-box">
+    <div className="builder-empty">
       <strong>The prototype appears here</strong>
       <p className="builder-lead">
         It is made once you approve the PRD: one working page on made-up data that you can try
@@ -1000,7 +1161,7 @@ function PreviewTab({ project }: { project: Project }) {
 function PrdTab({ builder, project }: { builder: Builder; project: Project }) {
   if (isLive(project) ? !project.prdText : answeredCount(project) === 0) {
     return (
-      <div className="state-box">
+      <div className="builder-empty">
         <strong>No PRD yet</strong>
         <p className="builder-lead">It is written from your answers to the interview.</p>
       </div>

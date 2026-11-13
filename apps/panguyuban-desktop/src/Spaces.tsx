@@ -3,7 +3,7 @@ import { SpaceStatus, spaceStatus } from "./api";
 import { TerminalView } from "./Terminal";
 
 /** A tab's panes: a leaf is one terminal (started in `cwd`), a split halves its box. */
-export type PaneLeaf = { pane: string; cwd: string };
+export type PaneLeaf = { pane: string; cwd: string; run?: string };
 export type PaneNode = PaneLeaf | { dir: "row" | "col"; a: PaneNode; b: PaneNode };
 export type TermTab = { id: string; root: PaneNode; focused: string };
 /** A space is a set of terminal tabs, named after the folder its focused terminal is in. */
@@ -15,9 +15,9 @@ const HOME = "~";
 let seq = 0;
 const newId = () => `t${++seq}`;
 
-function newTab(cwd: string): TermTab {
+function newTab(cwd: string, run?: string): TermTab {
   const pane = newId();
-  return { id: newId(), root: { pane, cwd }, focused: pane };
+  return { id: newId(), root: { pane, cwd, run }, focused: pane };
 }
 
 function newSpace(): Space {
@@ -121,6 +121,19 @@ export function useSpaces() {
     setActiveId(space.id);
   }
 
+  /** Runs `command` in a new tab of the space already in `cwd`, or of a new space there. */
+  function runIn(cwd: string, command: string): void {
+    const tab = newTab(cwd, command);
+    const existing = list.find((s) => cwdOf(s) === cwd);
+    if (existing) {
+      updateSpace(existing.id, (s) => ({ ...s, tabs: [...s.tabs, tab], activeTab: tab.id }));
+      return setActiveId(existing.id);
+    }
+    const space = { id: newId(), tabs: [tab], activeTab: tab.id };
+    setList((all) => [...all, space]);
+    setActiveId(space.id);
+  }
+
   function split(spaceId: string, tabId: string, paneId: string, dir: "row" | "col"): void {
     const pane = newId();
     const cwd = paneCwd[paneId] ?? HOME;
@@ -150,6 +163,7 @@ export function useSpaces() {
     remove: (id: string) => setList((all) => all.filter((s) => s.id !== id)),
     openTab,
     openAt,
+    runIn,
     selectTab: (tabId: string) => active && updateSpace(active.id, (s) => ({ ...s, activeTab: tabId })),
     closeTab: (tabId: string) => active && updateTab(active.id, tabId, () => null),
     split,
@@ -252,6 +266,7 @@ export function TerminalStages(props: { spaces: SpacesState; shown: boolean }) {
                 >
                   <TerminalView
                     cwd={leaf.cwd}
+                    run={leaf.run}
                     focused={visible && tab.focused === leaf.pane}
                     onFocus={() => spaces.focusPane(space.id, tab.id, leaf.pane)}
                     onCwd={(cwd) => spaces.reportCwd(leaf.pane, cwd)}

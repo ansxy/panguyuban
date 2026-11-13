@@ -1,6 +1,8 @@
 //! Guided builder commands: which agents are installed, and one interview turn.
 
 use std::path::PathBuf;
+use std::process::Command;
+use std::sync::{Mutex, OnceLock};
 
 use agent_runtime::{
     design_turn, interview_turn, plan_turn, runtime_for, DesignRequest, InterviewRequest, Plan, Turn,
@@ -23,6 +25,59 @@ pub fn harness_statuses() -> Vec<HarnessStatus> {
             harness,
             available: runtime_for(harness).map(|r| r.is_available()).unwrap_or(false),
         })
+        .collect()
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ModelOption {
+    pub id: String,
+    pub label: String,
+}
+
+/// Claude Code has no list command, so these are the aliases its `--model` documents.
+const CLAUDE_MODELS: [(&str, &str); 4] = [
+    ("fable", "Fable (latest)"),
+    ("opus", "Opus (latest)"),
+    ("sonnet", "Sonnet (latest)"),
+    ("haiku", "Haiku (latest)"),
+];
+
+/// Antigravity's list, fetched once per app run (it takes a few seconds and needs the network).
+static AGY_MODELS: OnceLock<Mutex<Option<Vec<ModelOption>>>> = OnceLock::new();
+
+/// Every model the harness's tool offers.
+pub fn models_for(harness: &str) -> Result<Vec<ModelOption>, String> {
+    match harness {
+        "claude" => Ok(CLAUDE_MODELS
+            .iter()
+            .map(|(id, label)| ModelOption { id: (*id).into(), label: (*label).into() })
+            .collect()),
+        "antigravity" => {
+            let mut cached = AGY_MODELS.get_or_init(Default::default).lock().map_err(|e| e.to_string())?;
+            if let Some(models) = cached.as_ref() {
+                return Ok(models.clone());
+            }
+            let out = Command::new("agy")
+                .arg("models")
+                .output()
+                .map_err(|e| format!("Could not run agy: {e}"))?;
+            if !out.status.success() {
+                return Err(format!("agy models failed: {}", String::from_utf8_lossy(&out.stderr).trim()));
+            }
+            let models = parse_models(&String::from_utf8_lossy(&out.stdout));
+            *cached = Some(models.clone());
+            Ok(models)
+        }
+        other => Err(format!("Unknown agent tool: {other}")),
+    }
+}
+
+/// `<id>\t<label>` per line; anything without a tab (the "Fetching..." line) is skipped.
+fn parse_models(text: &str) -> Vec<ModelOption> {
+    text.lines()
+        .filter_map(|line| line.split_once('\t'))
+        .map(|(id, label)| ModelOption { id: id.trim().into(), label: label.trim().into() })
+        .filter(|m| !m.id.is_empty())
         .collect()
 }
 
@@ -217,6 +272,15 @@ mod tests {
         };
         assert!(save_prd(args("../../evil.sh")).is_err());
         assert!(save_prd(args("notes.md")).is_err());
+    }
+
+    #[test]
+    fn model_lines_are_parsed_and_noise_skipped() {
+        let text = "Fetching available models...\ngemini-4-argon-medium\tGemini 4 Argon (Medium)\nclaude-opus-5-5-high\tClaude Opus 5.5 (High)\n";
+        let models = parse_models(text);
+        assert_eq!(models.len(), 2);
+        assert_eq!(models[0].id, "gemini-4-argon-medium");
+        assert_eq!(models[1].label, "Claude Opus 5.5 (High)");
     }
 
     #[test]
