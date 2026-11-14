@@ -106,6 +106,8 @@ export function AgentsView(props: {
   agents: AgentsState;
   splitter: React.ReactNode;
   focusButton: React.ReactNode;
+  /** Opens a handoff of this folder; absent when the Memory feature is off. */
+  onHandOff?: (cwd: string, name: string) => void;
 }) {
   const { sessions, usage, error, selectedId, setSelectedId } = props.agents;
   const [filter, setFilter] = useState<StatusFilter>("all");
@@ -204,7 +206,7 @@ export function AgentsView(props: {
 
       <section className="pane pane--detail ticket-detail" aria-label="Selected agent session">
         {active ? (
-          <AgentDetail key={active.session_id} session={active} now={now} focusButton={props.focusButton} onEnded={props.agents.refresh} />
+          <AgentDetail key={active.session_id} session={active} now={now} focusButton={props.focusButton} onEnded={props.agents.refresh} onHandOff={props.onHandOff} />
         ) : (
           <div className="pane-header">
             <h2>No session selected</h2>
@@ -273,11 +275,13 @@ function AgentDetail({
   now,
   focusButton,
   onEnded,
+  onHandOff,
 }: {
   session: AgentSession;
   now: number;
   focusButton: React.ReactNode;
   onEnded: () => void;
+  onHandOff?: (cwd: string, name: string) => void;
 }) {
   const [note, setNote] = useState("");
   // Ending a session cannot be undone, so it takes a second click.
@@ -315,6 +319,11 @@ function AgentDetail({
           >
             Open folder
           </button>
+          {onHandOff && (
+            <button type="button" className="btn" onClick={() => onHandOff(s.cwd, s.name)}>
+              Hand off
+            </button>
+          )}
           {s.harness === "claude" && (
             <button
               type="button"

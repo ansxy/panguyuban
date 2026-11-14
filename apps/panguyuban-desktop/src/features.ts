@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-export type FeatureKey = "tickets" | "prs" | "agents" | "meetings" | "prototypes" | "requests";
+export type FeatureKey = "tickets" | "prs" | "agents" | "meetings" | "prototypes" | "requests" | "memory";
 
 export const FEATURES: { key: FeatureKey; label: string; what: string; cost?: string }[] = [
   { key: "tickets", label: "Tickets", what: "Plane tickets in the sidebar and on Overview." },
@@ -24,6 +24,7 @@ export const FEATURES: { key: FeatureKey; label: string; what: string; cost?: st
     cost: "Looks for installed agents when the app opens.",
   },
   { key: "requests", label: "Requests", what: "HTTP client for your endpoints." },
+  { key: "memory", label: "Memory", what: "One note about you for every agent, and handoffs between them." },
 ];
 
 const KEY = "panguyuban.features";

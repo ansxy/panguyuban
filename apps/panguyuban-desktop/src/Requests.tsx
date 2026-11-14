@@ -1,10 +1,12 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useRef, useState } from "react";
 import { HttpResponse, sendHttp } from "./api";
+import { usePersisted } from "./persisted";
 import { ImportedRequest, parseCollection, Row } from "./postman";
 
 const METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"];
 const CONTENT_TYPES = ["none", "application/json", "application/x-www-form-urlencoded", "text/plain", "application/xml"];
-const STORE_KEY = "panguyuban.requests.v2";
+/** Where drafts were kept before they moved to the app database; read once to migrate. */
+const LEGACY_STORE_KEY = "panguyuban.requests.v2";
 
 interface RequestDraft {
   id: string;
@@ -26,22 +28,14 @@ function blankDraft(): RequestDraft {
   return { id: crypto.randomUUID(), method: "GET", url: "", params: [], headers: [], contentType: "none", body: "" };
 }
 
-function loadDrafts(): RequestDraft[] {
+function parseDrafts(raw: string): RequestDraft[] {
   try {
-    const parsed = JSON.parse(window.localStorage.getItem(STORE_KEY) ?? "[]");
+    const parsed = JSON.parse(raw);
     if (Array.isArray(parsed) && parsed.length > 0) return parsed as RequestDraft[];
   } catch {
     /* unreadable store: start fresh */
   }
   return [blankDraft()];
-}
-
-function saveDrafts(drafts: RequestDraft[]): void {
-  try {
-    window.localStorage.setItem(STORE_KEY, JSON.stringify(drafts));
-  } catch {
-    /* storage unavailable: the session still works, it just is not kept */
-  }
 }
 
 function activeRows(rows: Row[]): Row[] {
@@ -74,11 +68,9 @@ function displayBody(res: HttpResponse): string {
 
 /** Request tabs live here (not in the view) so they survive switching sections. Only drafts are saved; responses stay in memory, one per tab. */
 export function useRequests() {
-  const [drafts, setDrafts] = useState<RequestDraft[]>(loadDrafts);
+  const [drafts, setDrafts, loaded, loadError] = usePersisted<RequestDraft[]>("requests", LEGACY_STORE_KEY, parseDrafts, [blankDraft()]);
   const [currentId, setCurrentId] = useState<string>(() => drafts[0].id);
   const [outcomes, setOutcomes] = useState<Record<string, Outcome>>({});
-
-  useEffect(() => saveDrafts(drafts), [drafts]);
 
   const current = drafts.find((d) => d.id === currentId) ?? drafts[0];
 
@@ -137,7 +129,7 @@ export function useRequests() {
     setOutcomes((all) => ({ ...all, [draft.id]: outcome }));
   }
 
-  return { drafts, current, outcome: outcomes[current.id], select: setCurrentId, update, open, importMany, close, send };
+  return { loaded, loadError, drafts, current, outcome: outcomes[current.id], select: setCurrentId, update, open, importMany, close, send };
 }
 
 export type Requests = ReturnType<typeof useRequests>;
@@ -159,6 +151,13 @@ export function RequestsView({ requests }: { requests: Requests }) {
     body: current.contentType === "none" ? 0 : 1,
     headers: activeRows(current.headers).length,
   };
+
+  if (!requests.loaded)
+    return (
+      <p className="req-empty" role={requests.loadError ? "alert" : undefined}>
+        {requests.loadError ? `Could not read saved requests: ${requests.loadError}` : "Loading requests…"}
+      </p>
+    );
 
   return (
     <>

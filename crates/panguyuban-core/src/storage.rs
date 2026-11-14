@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::error::CoreError;
 use crate::models::{PullRequest, Ticket, WorkspaceConfig};
@@ -57,6 +57,11 @@ impl SqliteStore {
                     id INTEGER PRIMARY KEY CHECK (id = 1),
                     payload TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS app_data (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
                 ",
             )
             .map_err(|e| CoreError::StorageError(e.to_string()))?;
@@ -71,6 +76,35 @@ impl SqliteStore {
             )
             .map_err(|e| CoreError::StorageError(e.to_string()))?;
 
+        Ok(())
+    }
+
+    /// Small app-owned documents (the UI's saved prototypes and request drafts), one JSON string per key.
+    pub fn get_app_data(&self, key: &str) -> Result<Option<String>, CoreError> {
+        let guard = self
+            .conn
+            .lock()
+            .map_err(|e| CoreError::StorageError(e.to_string()))?;
+        guard
+            .query_row("SELECT value FROM app_data WHERE key = ?1", params![key], |row| {
+                row.get(0)
+            })
+            .optional()
+            .map_err(|e| CoreError::StorageError(e.to_string()))
+    }
+
+    pub fn set_app_data(&self, key: &str, value: &str) -> Result<(), CoreError> {
+        let guard = self
+            .conn
+            .lock()
+            .map_err(|e| CoreError::StorageError(e.to_string()))?;
+        guard
+            .execute(
+                "INSERT INTO app_data (key, value, updated_at) VALUES (?1, ?2, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+                params![key, value],
+            )
+            .map_err(|e| CoreError::StorageError(e.to_string()))?;
         Ok(())
     }
 
@@ -317,5 +351,16 @@ mod tests {
         cfg.plane_workspace_slug = "custom-slug".into();
         store.save_config(&cfg).unwrap();
         assert_eq!(store.get_config().unwrap().plane_workspace_slug, "custom-slug");
+    }
+
+    #[test]
+    fn app_data_roundtrips_and_overwrites() {
+        let store = SqliteStore::open_in_memory().expect("open in-memory sqlite");
+        assert_eq!(store.get_app_data("builder").unwrap(), None);
+        store.set_app_data("builder", "[1]").unwrap();
+        assert_eq!(store.get_app_data("builder").unwrap().as_deref(), Some("[1]"));
+        store.set_app_data("builder", "[2]").unwrap();
+        assert_eq!(store.get_app_data("builder").unwrap().as_deref(), Some("[2]"));
+        assert_eq!(store.get_app_data("requests").unwrap(), None);
     }
 }

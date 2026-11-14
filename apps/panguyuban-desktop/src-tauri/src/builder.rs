@@ -7,6 +7,7 @@ use std::sync::{Mutex, OnceLock};
 use agent_runtime::{
     design_turn, interview_turn, plan_turn, runtime_for, DesignRequest, InterviewRequest, Plan, Turn,
 };
+use panguyuban_core::storage::SqliteStore;
 use serde::{Deserialize, Serialize};
 
 const HARNESSES: [&str; 2] = ["claude", "antigravity"];
@@ -102,8 +103,8 @@ pub struct InterviewTurnResult {
 }
 
 /// Runs one interview turn and saves the PRD if the agent wrote one.
-pub fn run_interview_turn(args: InterviewTurnArgs) -> Result<InterviewTurnResult, String> {
-    let runtime = runtime_for(&args.harness).map_err(|e| e.to_string())?;
+pub fn run_interview_turn(store: &SqliteStore, args: InterviewTurnArgs) -> Result<InterviewTurnResult, String> {
+    let runtime = crate::provider::runtime_for(store, &args.harness)?;
     let dir = project_dir(&args.project_name, &args.project_id);
     std::fs::create_dir_all(&dir).map_err(|e| format!("Could not create {}: {e}", dir.display()))?;
 
@@ -140,8 +141,8 @@ pub struct PlanArgs {
 }
 
 /// Has the agent size each step of the approved PRD, and keeps the plan beside prd.md.
-pub fn run_plan(args: PlanArgs) -> Result<Plan, String> {
-    let runtime = runtime_for(&args.harness).map_err(|e| e.to_string())?;
+pub fn run_plan(store: &SqliteStore, args: PlanArgs) -> Result<Plan, String> {
+    let runtime = crate::provider::runtime_for(store, &args.harness)?;
     let dir = project_dir(&args.project_name, &args.project_id);
     std::fs::create_dir_all(&dir).map_err(|e| format!("Could not create {}: {e}", dir.display()))?;
     let plan = plan_turn(runtime.as_ref(), &args.prd, args.model.as_deref(), &dir).map_err(|e| e.to_string())?;
@@ -175,8 +176,8 @@ pub struct DesignResult {
 }
 
 /// Has the agent propose or revise the HTML mock-up, and keeps it beside prd.md.
-pub fn run_design(args: DesignArgs) -> Result<DesignResult, String> {
-    let runtime = runtime_for(&args.harness).map_err(|e| e.to_string())?;
+pub fn run_design(store: &SqliteStore, args: DesignArgs) -> Result<DesignResult, String> {
+    let runtime = crate::provider::runtime_for(store, &args.harness)?;
     let dir = project_dir(&args.project_name, &args.project_id);
     std::fs::create_dir_all(&dir).map_err(|e| format!("Could not create {}: {e}", dir.display()))?;
     let request = DesignRequest {

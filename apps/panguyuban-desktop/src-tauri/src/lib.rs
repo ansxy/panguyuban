@@ -2,6 +2,8 @@ mod agents;
 mod builder;
 mod calendar;
 mod http;
+mod memory;
+mod provider;
 mod spaces;
 mod terminal;
 
@@ -71,6 +73,22 @@ impl SecretStore for KeyringSecretStore {
             .map_err(|e| CoreError::StorageError(e.to_string()))?;
         if let Ok(mut cache) = self.cache.lock() {
             cache.insert(key.to_string(), Some(value.to_string()));
+        }
+        Ok(())
+    }
+}
+
+impl KeyringSecretStore {
+    /// Removes the key; a key that was never saved is fine.
+    pub fn delete_secret(&self, key: &str) -> Result<(), CoreError> {
+        let entry = keyring::Entry::new(&self.service_name, key)
+            .map_err(|e| CoreError::StorageError(e.to_string()))?;
+        match entry.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => {}
+            Err(e) => return Err(CoreError::StorageError(e.to_string())),
+        }
+        if let Ok(mut cache) = self.cache.lock() {
+            cache.insert(key.to_string(), None);
         }
         Ok(())
     }
@@ -618,25 +636,35 @@ async fn builder_models(harness: String) -> Result<Vec<builder::ModelOption>, St
 /// One PRD interview turn. The agent process runs off the async runtime's worker threads.
 #[tauri::command]
 async fn builder_interview_turn(
+    state: tauri::State<'_, DesktopController>,
     args: builder::InterviewTurnArgs,
 ) -> Result<builder::InterviewTurnResult, String> {
-    tokio::task::spawn_blocking(move || builder::run_interview_turn(args))
+    let store = state.store.clone();
+    tokio::task::spawn_blocking(move || builder::run_interview_turn(&store, args))
         .await
         .map_err(|e| e.to_string())?
 }
 
 /// Sizes the steps of an approved PRD and flags the ones an engineer must clear.
 #[tauri::command]
-async fn builder_plan(args: builder::PlanArgs) -> Result<agent_runtime::Plan, String> {
-    tokio::task::spawn_blocking(move || builder::run_plan(args))
+async fn builder_plan(
+    state: tauri::State<'_, DesktopController>,
+    args: builder::PlanArgs,
+) -> Result<agent_runtime::Plan, String> {
+    let store = state.store.clone();
+    tokio::task::spawn_blocking(move || builder::run_plan(&store, args))
         .await
         .map_err(|e| e.to_string())?
 }
 
 /// Proposes or revises the HTML mock-up for an approved PRD.
 #[tauri::command]
-async fn builder_design(args: builder::DesignArgs) -> Result<builder::DesignResult, String> {
-    tokio::task::spawn_blocking(move || builder::run_design(args))
+async fn builder_design(
+    state: tauri::State<'_, DesktopController>,
+    args: builder::DesignArgs,
+) -> Result<builder::DesignResult, String> {
+    let store = state.store.clone();
+    tokio::task::spawn_blocking(move || builder::run_design(&store, args))
         .await
         .map_err(|e| e.to_string())?
 }
@@ -695,6 +723,75 @@ async fn space_status(paths: Vec<String>) -> Result<Vec<spaces::SpaceStatus>, St
         .map_err(|e| e.to_string())
 }
 
+/// Only the documents the UI keeps in the database.
+fn check_app_data_key(key: &str) -> Result<(), String> {
+    match key {
+        "builder" | "requests" | "memory" | "handoffs" | "providers" => Ok(()),
+        _ => Err(format!("unknown app data key: {key}")),
+    }
+}
+
+/// Lists a provider's models. The key is read from the keychain here, never sent from the UI.
+#[tauri::command]
+async fn provider_models(id: String, base_url: String) -> Result<Vec<builder::ModelOption>, String> {
+    provider::models(&id, &base_url).await
+}
+
+#[tauri::command]
+async fn provider_set_key(id: String, key: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || provider::set_key(&id, &key)).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn provider_delete_key(id: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || provider::delete_key(&id)).await.map_err(|e| e.to_string())?
+}
+
+/// Only whether a key is saved; the key itself never leaves Rust.
+#[tauri::command]
+async fn provider_has_key(id: String) -> Result<bool, String> {
+    tokio::task::spawn_blocking(move || provider::has_key(&id)).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+fn app_data_get(
+    state: tauri::State<'_, DesktopController>,
+    key: String,
+) -> Result<Option<String>, String> {
+    check_app_data_key(&key)?;
+    state.store.get_app_data(&key).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn app_data_set(
+    state: tauri::State<'_, DesktopController>,
+    key: String,
+    value: String,
+) -> Result<(), String> {
+    check_app_data_key(&key)?;
+    state.store.set_app_data(&key, &value).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn memory_status(text: String) -> Result<Vec<memory::TargetStatus>, String> {
+    tokio::task::spawn_blocking(move || memory::status(&text)).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn memory_sync(text: String, targets: Vec<String>) -> Result<Vec<memory::TargetStatus>, String> {
+    tokio::task::spawn_blocking(move || memory::sync(&text, &targets)).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn memory_remove(target: String) -> Result<memory::TargetStatus, String> {
+    tokio::task::spawn_blocking(move || memory::remove(&target)).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn agent_clis() -> Result<Vec<memory::AgentCli>, String> {
+    tokio::task::spawn_blocking(memory::agent_clis).await.map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 async fn send_http(request: http::HttpRequest) -> Result<http::HttpResponse, String> {
     http::send(request).await
@@ -745,10 +842,22 @@ pub fn run() {
         .or_else(|_| DesktopController::new_in_memory())
         .expect("Failed to initialize Panguyuban DesktopController");
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    // macOS only: elsewhere Tauri adds no menu bar, and ⌘W is not a window shortcut.
+    #[cfg(target_os = "macos")]
+    let builder = builder.menu(app_menu);
+    builder
         .manage(controller)
         .manage(Tracker::default())
         .manage(terminal::Terminals::default())
+        .on_menu_event(|app, event| {
+            if event.id() == CLOSE_WINDOW {
+                use tauri::Manager;
+                for window in app.webview_windows().values() {
+                    let _ = window.close();
+                }
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             get_dashboard_state,
             sync_providers,
@@ -786,10 +895,60 @@ pub fn run() {
             folder_read_file,
             folder_changes,
             send_http,
+            app_data_get,
+            app_data_set,
+            provider_models,
+            provider_set_key,
+            provider_delete_key,
+            provider_has_key,
+            memory_status,
+            memory_sync,
+            memory_remove,
+            agent_clis,
             save_workspace_config
         ])
         .run(tauri::generate_context!())
         .expect("error while running Panguyuban Tauri desktop application");
+}
+
+const CLOSE_WINDOW: &str = "close-window";
+
+/// The standard menu, except Close Window moves to ⇧⌘W so ⌘W reaches the app,
+/// which closes the focused terminal instead of the whole window.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn app_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<tauri::menu::Menu<R>> {
+    use tauri::menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder};
+    let close = MenuItemBuilder::with_id(CLOSE_WINDOW, "Close Window")
+        .accelerator("Shift+CmdOrCtrl+W")
+        .build(app)?;
+    let app_items = SubmenuBuilder::new(app, "Panguyuban")
+        .about(None)
+        .separator()
+        .services()
+        .separator()
+        .hide()
+        .hide_others()
+        .show_all()
+        .separator()
+        .quit()
+        .build()?;
+    let edit = SubmenuBuilder::new(app, "Edit")
+        .undo()
+        .redo()
+        .separator()
+        .cut()
+        .copy()
+        .paste()
+        .select_all()
+        .build()?;
+    let view = SubmenuBuilder::new(app, "View").fullscreen().build()?;
+    let window = SubmenuBuilder::new(app, "Window")
+        .minimize()
+        .maximize()
+        .separator()
+        .item(&close)
+        .build()?;
+    MenuBuilder::new(app).items(&[&app_items, &edit, &view, &window]).build()
 }
 
 #[cfg(test)]

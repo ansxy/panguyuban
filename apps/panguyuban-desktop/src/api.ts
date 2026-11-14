@@ -522,9 +522,58 @@ export interface HttpResponse {
   elapsed_ms: number;
 }
 
+const NEEDS_DESKTOP = "Providers need the desktop app";
+
+/** Models a provider offers; the key is read from the keychain in Rust. Rejects with the reason. */
+export async function providerModels(id: string, baseUrl: string): Promise<{ id: string; label: string }[]> {
+  if (!window.__TAURI_INTERNALS__?.invoke) throw NEEDS_DESKTOP;
+  return window.__TAURI_INTERNALS__.invoke<{ id: string; label: string }[]>("provider_models", { id, baseUrl });
+}
+
+export async function providerSetKey(id: string, key: string): Promise<void> {
+  if (!window.__TAURI_INTERNALS__?.invoke) throw NEEDS_DESKTOP;
+  return window.__TAURI_INTERNALS__.invoke<void>("provider_set_key", { id, key });
+}
+
+export async function providerDeleteKey(id: string): Promise<void> {
+  if (!window.__TAURI_INTERNALS__?.invoke) return;
+  return window.__TAURI_INTERNALS__.invoke<void>("provider_delete_key", { id });
+}
+
+/** Whether a key is saved. The key itself never comes back to the UI. */
+export async function providerHasKey(id: string): Promise<boolean> {
+  if (!window.__TAURI_INTERNALS__?.invoke) return false;
+  return window.__TAURI_INTERNALS__.invoke<boolean>("provider_has_key", { id });
+}
+
 /** Sends a request from Rust (no CORS); rejects on network or URL errors. */
 export function sendHttp(request: HttpRequest): Promise<HttpResponse> {
   return window.__TAURI_INTERNALS__!.invoke<HttpResponse>("send_http", { request });
+}
+
+const DATA_PREFIX = "panguyuban.data.";
+
+/** A saved document from the app database ("builder" or "requests"); null if none yet. */
+export async function appDataGet(key: string): Promise<string | null> {
+  if (window.__TAURI_INTERNALS__?.invoke) {
+    return window.__TAURI_INTERNALS__.invoke<string | null>("app_data_get", { key });
+  }
+  try {
+    return window.localStorage.getItem(DATA_PREFIX + key);
+  } catch {
+    return null;
+  }
+}
+
+export async function appDataSet(key: string, value: string): Promise<void> {
+  if (window.__TAURI_INTERNALS__?.invoke) {
+    return window.__TAURI_INTERNALS__.invoke<void>("app_data_set", { key, value });
+  }
+  try {
+    window.localStorage.setItem(DATA_PREFIX + key, value);
+  } catch {
+    /* storage unavailable: the session still works, it just is not kept */
+  }
 }
 
 export interface CalendarEvent {
@@ -560,4 +609,45 @@ export async function openMeeting(url: string): Promise<void> {
     return window.__TAURI_INTERNALS__.invoke<void>("open_meeting", { url });
   }
   window.open(url, "_blank", "noreferrer");
+}
+
+export interface MemoryTarget {
+  id: string;
+  label: string;
+  path: string;
+  state: "in_sync" | "out_of_date" | "not_written" | "not_installed" | "too_long" | "busy" | "error";
+  detail: string | null;
+  length: number | null;
+  limit: number | null;
+  /** The agent's file holds the managed block. */
+  written: boolean;
+}
+
+/** Where the note stands in each agent's instruction file. Empty outside the desktop app. */
+export async function memoryStatus(text: string): Promise<MemoryTarget[]> {
+  if (window.__TAURI_INTERNALS__?.invoke) {
+    return window.__TAURI_INTERNALS__.invoke<MemoryTarget[]>("memory_status", { text });
+  }
+  return [];
+}
+
+/** Writes the note into the listed agents' files and returns every agent's status. */
+export async function memorySync(text: string, targets: string[]): Promise<MemoryTarget[]> {
+  if (window.__TAURI_INTERNALS__?.invoke) {
+    return window.__TAURI_INTERNALS__.invoke<MemoryTarget[]>("memory_sync", { text, targets });
+  }
+  return [];
+}
+
+/** Takes the note out of one agent's file. */
+export function memoryRemove(target: string): Promise<MemoryTarget> {
+  return window.__TAURI_INTERNALS__!.invoke<MemoryTarget>("memory_remove", { target });
+}
+
+/** Which agent commands (claude, codex, agy, hermes) are on PATH. Empty outside the desktop app. */
+export async function agentClis(): Promise<{ id: string; available: boolean }[]> {
+  if (window.__TAURI_INTERNALS__?.invoke) {
+    return window.__TAURI_INTERNALS__.invoke<{ id: string; available: boolean }[]>("agent_clis");
+  }
+  return [];
 }

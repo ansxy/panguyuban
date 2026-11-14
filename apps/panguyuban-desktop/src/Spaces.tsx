@@ -2,9 +2,10 @@ import React, { useEffect, useState } from "react";
 import { SpaceStatus, spaceStatus } from "./api";
 import { TerminalView } from "./Terminal";
 
-/** A tab's panes: a leaf is one terminal (started in `cwd`), a split halves its box. */
+/** A tab's panes: a leaf is one terminal (started in `cwd`), a split divides its box (`ratio` to `a`, half by default). */
 export type PaneLeaf = { pane: string; cwd: string; run?: string };
-export type PaneNode = PaneLeaf | { dir: "row" | "col"; a: PaneNode; b: PaneNode };
+export type PaneSplit = { dir: "row" | "col"; a: PaneNode; b: PaneNode; ratio?: number };
+export type PaneNode = PaneLeaf | PaneSplit;
 export type TermTab = { id: string; root: PaneNode; focused: string };
 /** A space is a set of terminal tabs, named after the folder its focused terminal is in. */
 export type Space = { id: string; tabs: TermTab[]; activeTab: string };
@@ -44,14 +45,37 @@ function firstPane(node: PaneNode): string {
 
 type Rect = { x: number; y: number; w: number; h: number };
 
+const MIN_RATIO = 0.15;
+const clampRatio = (ratio: number) => Math.min(1 - MIN_RATIO, Math.max(MIN_RATIO, ratio));
+
+function halves(node: PaneSplit, r: Rect): [Rect, Rect] {
+  const k = node.ratio ?? 0.5;
+  return node.dir === "row"
+    ? [{ ...r, w: r.w * k }, { ...r, x: r.x + r.w * k, w: r.w * (1 - k) }]
+    : [{ ...r, h: r.h * k }, { ...r, y: r.y + r.h * k, h: r.h * (1 - k) }];
+}
+
 /** Each pane's box in percent of the tab. */
 function layoutPanes(node: PaneNode, r: Rect = { x: 0, y: 0, w: 100, h: 100 }): [PaneLeaf, Rect][] {
   if ("pane" in node) return [[node, r]];
-  const [first, second]: [Rect, Rect] =
-    node.dir === "row"
-      ? [{ ...r, w: r.w / 2 }, { ...r, x: r.x + r.w / 2, w: r.w / 2 }]
-      : [{ ...r, h: r.h / 2 }, { ...r, y: r.y + r.h / 2, h: r.h / 2 }];
+  const [first, second] = halves(node, r);
   return [...layoutPanes(node.a, first), ...layoutPanes(node.b, second)];
+}
+
+/** Each split's box, keyed by its path from the root ("", "a", "ab", …), for the drag handles. */
+function layoutSplits(node: PaneNode, r: Rect = { x: 0, y: 0, w: 100, h: 100 }, path = ""): [string, PaneSplit, Rect][] {
+  if ("pane" in node) return [];
+  const [first, second] = halves(node, r);
+  return [[path, node, r], ...layoutSplits(node.a, first, path + "a"), ...layoutSplits(node.b, second, path + "b")];
+}
+
+/** Replaces the split at `path` with what `f` returns. */
+function mapSplit(node: PaneNode, path: string, f: (split: PaneSplit) => PaneSplit): PaneNode {
+  if ("pane" in node) return node;
+  if (!path) return f(node);
+  return path[0] === "a"
+    ? { ...node, a: mapSplit(node.a, path.slice(1), f) }
+    : { ...node, b: mapSplit(node.b, path.slice(1), f) };
 }
 
 function currentTabOf(space: Space | undefined): TermTab | undefined {
@@ -144,6 +168,11 @@ export function useSpaces() {
     }));
   }
 
+  /** Moves the divider of the split at `path`; `ratio` is the first side's share. */
+  function resizeSplit(spaceId: string, tabId: string, path: string, ratio: number): void {
+    updateTab(spaceId, tabId, (t) => ({ ...t, root: mapSplit(t.root, path, (s) => ({ ...s, ratio: clampRatio(ratio) })) }));
+  }
+
   function closePane(spaceId: string, tabId: string, paneId: string): void {
     updateTab(spaceId, tabId, (t) => {
       const root = mapPane(t.root, paneId, () => null);
@@ -153,6 +182,7 @@ export function useSpaces() {
   }
 
   return {
+    resizeSplit,
     list,
     active,
     currentTab,
@@ -169,6 +199,8 @@ export function useSpaces() {
     split,
     splitFocused: (dir: "row" | "col") => active && currentTab && split(active.id, currentTab.id, currentTab.focused, dir),
     closePane,
+    /** Closes the focused terminal of the current tab; the last one takes its tab with it. */
+    closeFocused: () => active && currentTab && closePane(active.id, currentTab.id, currentTab.focused),
     focusPane: (spaceId: string, tabId: string, paneId: string) =>
       updateTab(spaceId, tabId, (t) => (t.focused === paneId ? t : { ...t, focused: paneId })),
     reportCwd: (paneId: string, cwd: string) =>
@@ -275,10 +307,78 @@ export function TerminalStages(props: { spaces: SpacesState; shown: boolean }) {
                   />
                 </div>
               ))}
+              {layoutSplits(tab.root).map(([path, split, r]) => (
+                <PaneDivider
+                  key={path}
+                  split={split}
+                  box={r}
+                  onResize={(ratio) => spaces.resizeSplit(space.id, tab.id, path, ratio)}
+                />
+              ))}
             </main>
           );
         })
       )}
     </>
+  );
+}
+
+/** Drag handle on a split's edge. Arrow keys move it 5%, double-click puts it back to the middle. */
+function PaneDivider(props: { split: PaneSplit; box: Rect; onResize: (ratio: number) => void }) {
+  const { split, box } = props;
+  const row = split.dir === "row";
+  const ratio = split.ratio ?? 0.5;
+  const at = row
+    ? { left: `${box.x + box.w * ratio}%`, top: `${box.y}%`, height: `${box.h}%` }
+    : { top: `${box.y + box.h * ratio}%`, left: `${box.x}%`, width: `${box.w}%` };
+
+  function handlePointerDown(e: React.PointerEvent<HTMLDivElement>) {
+    const stage = e.currentTarget.parentElement?.getBoundingClientRect();
+    if (!stage) return;
+    e.preventDefault();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    document.documentElement.dataset.resizing = row ? "col" : "row";
+    const move = (ev: PointerEvent) => {
+      const pct = row
+        ? ((ev.clientX - stage.left) / stage.width) * 100
+        : ((ev.clientY - stage.top) / stage.height) * 100;
+      props.onResize(row ? (pct - box.x) / box.w : (pct - box.y) / box.h);
+    };
+    const target = e.currentTarget;
+    const up = () => {
+      delete document.documentElement.dataset.resizing;
+      target.removeEventListener("pointermove", move);
+      target.removeEventListener("pointerup", up);
+      target.removeEventListener("pointercancel", up);
+    };
+    target.addEventListener("pointermove", move);
+    target.addEventListener("pointerup", up);
+    target.addEventListener("pointercancel", up);
+  }
+
+  function handleKeyDown(e: React.KeyboardEvent<HTMLDivElement>) {
+    const back = row ? "ArrowLeft" : "ArrowUp";
+    const forward = row ? "ArrowRight" : "ArrowDown";
+    if (e.key !== back && e.key !== forward) return;
+    e.preventDefault();
+    props.onResize(ratio + (e.key === forward ? 0.05 : -0.05));
+  }
+
+  return (
+    <div
+      className="term-divider"
+      data-dir={split.dir}
+      style={at}
+      role="separator"
+      tabIndex={0}
+      aria-label="Resize terminals"
+      aria-orientation={row ? "vertical" : "horizontal"}
+      aria-valuemin={Math.round(MIN_RATIO * 100)}
+      aria-valuemax={Math.round((1 - MIN_RATIO) * 100)}
+      aria-valuenow={Math.round(ratio * 100)}
+      onPointerDown={handlePointerDown}
+      onKeyDown={handleKeyDown}
+      onDoubleClick={() => props.onResize(0.5)}
+    />
   );
 }

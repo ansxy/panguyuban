@@ -1725,6 +1725,54 @@ html[data-resizing] .workspace-grid {
   padding: 4px;
 }
 
+/* Drag handle on the gap between two terminals; a line shows on hover, drag and focus. */
+.term-divider {
+  position: absolute;
+  z-index: 2;
+  touch-action: none;
+}
+
+.term-divider[data-dir="row"] {
+  width: 8px;
+  transform: translateX(-50%);
+  cursor: col-resize;
+}
+
+.term-divider[data-dir="col"] {
+  height: 8px;
+  transform: translateY(-50%);
+  cursor: row-resize;
+}
+
+.term-divider::after {
+  content: "";
+  position: absolute;
+  background: transparent;
+}
+
+.term-divider[data-dir="row"]::after {
+  inset: 0 3px;
+}
+
+.term-divider[data-dir="col"]::after {
+  inset: 3px 0;
+}
+
+.term-divider:hover::after,
+.term-divider:focus-visible::after,
+html[data-resizing] .term-divider:active::after {
+  background: var(--color-accent);
+}
+
+.term-divider:focus-visible {
+  outline: none;
+}
+
+html[data-resizing="row"] {
+  cursor: row-resize;
+  user-select: none;
+}
+
 .term-pane {
   display: flex;
   flex-direction: column;
@@ -3305,4 +3353,40 @@ html[data-resizing] .workspace-grid {
   .agents-facts {
     grid-template-columns: minmax(0, 1fr);
   }
+}
+
+/* Memory: where the note is written, and a handoff row's action. */
+.memory-path {
+  font-family: var(--font-outlier);
+  font-size: var(--text-xs);
+  color: var(--color-muted);
+  overflow-wrap: anywhere;
+}
+
+.memory-remove {
+  margin-left: auto;
+}
+
+.provider-row {
+  flex-wrap: wrap;
+  justify-content: space-between;
+}
+
+.provider-url {
+  font-family: var(--font-outlier);
+  font-size: var(--text-xs);
+  color: var(--color-muted);
+  overflow-wrap: anywhere;
+}
+
+.provider-key {
+  display: flex;
+  gap: var(--space-xs);
+  margin: var(--space-xs) 0;
+}
+
+.provider-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-xs);
 }

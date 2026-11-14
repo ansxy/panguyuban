@@ -21,14 +21,16 @@ import {
 import { DiffFiles, FilterTabs, Icon, type IconName } from "./ui";
 import { AgentsView, shortPath, SidebarAgents, useAgents } from "./Agents";
 import { BuilderView, useBuilder } from "./Builder";
+import { ProvidersSection } from "./ProvidersSettings";
 import { FEATURES, type FeatureKey, useFeatures } from "./features";
 import { SidebarSpaces, TerminalStages, useSpaces } from "./Spaces";
 import { FolderPanel, PanelMode } from "./FolderPanel";
 import { RequestsView, useRequests } from "./Requests";
+import { type HandoffPrefill, MemoryView } from "./Memory";
 import { OverviewView, withSiblingFolders } from "./Overview";
 import { THEMES, applyTheme, savedTheme } from "./theme";
 
-type SectionKey = "overview" | "tickets" | "git" | "agents" | "builder" | "requests" | "terminal" | "settings";
+type SectionKey = "overview" | "tickets" | "git" | "agents" | "builder" | "requests" | "memory" | "terminal" | "settings";
 type DataState = "full" | "loading" | "empty" | "error";
 
 function formatCiState(pr: PullRequest): string {
@@ -141,6 +143,8 @@ export function App(): React.JSX.Element {
   const builder = useBuilder(features.prototypes);
   const spaces = useSpaces();
   const requests = useRequests();
+  // Set by an agent's "Hand off": opens the Memory view's composer on that folder.
+  const [handoffPrefill, setHandoffPrefill] = useState<HandoffPrefill | null>(null);
   // A view whose feature was just turned off falls back to Overview.
   const sectionFeature: Partial<Record<SectionKey, FeatureKey>> = {
     tickets: "tickets",
@@ -148,6 +152,7 @@ export function App(): React.JSX.Element {
     agents: "agents",
     builder: "prototypes",
     requests: "requests",
+    memory: "memory",
   };
   useEffect(() => {
     const needed = sectionFeature[section];
@@ -316,8 +321,8 @@ export function App(): React.JSX.Element {
     setSection("terminal");
   }
 
-  // ⌘T new tab, ⌘D split right, ⇧⌘D split down. Captured before xterm sees them.
-  // (⌘W stays the native Close Window shortcut.)
+  // ⌘T new tab, ⌘D split right, ⇧⌘D split down, ⌘W close the focused terminal.
+  // Captured before xterm sees them. Close Window is ⇧⌘W in the app menu, so ⌘W never closes the app.
   useEffect(() => {
     function onKey(e: KeyboardEvent): void {
       if (!e.metaKey || e.altKey || e.ctrlKey) return;
@@ -328,6 +333,10 @@ export function App(): React.JSX.Element {
       } else if (key === "d" && section === "terminal") {
         e.preventDefault();
         spaces.splitFocused(e.shiftKey ? "col" : "row");
+      } else if (key === "w" && !e.shiftKey) {
+        // Outside the terminals ⌘W does nothing rather than close the window.
+        e.preventDefault();
+        if (section === "terminal") spaces.closeFocused();
       }
     }
     window.addEventListener("keydown", onKey, true);
@@ -620,6 +629,16 @@ export function App(): React.JSX.Element {
               current={section === "requests"}
               collapsed={layout.sidebarCollapsed}
               onSelect={() => handleMenuSelect("requests")}
+            />
+)}
+            {features.memory && (
+<NavItem
+              icon="memory"
+              label="Memory"
+              hint="Note and handoffs"
+              current={section === "memory"}
+              collapsed={layout.sidebarCollapsed}
+              onSelect={() => handleMenuSelect("memory")}
             />
 )}
           </nav>
@@ -1238,6 +1257,14 @@ export function App(): React.JSX.Element {
                   />
                 }
                 focusButton={<FocusButton layout={layout} setLayout={setLayout} />}
+                onHandOff={
+                  features.memory
+                    ? (cwd, name) => {
+                        setHandoffPrefill({ folder: shortPath(cwd), task: name });
+                        handleMenuSelect("memory");
+                      }
+                    : undefined
+                }
               />
             </main>
           )}
@@ -1285,6 +1312,10 @@ export function App(): React.JSX.Element {
           )}
 
           {dataState === "full" && section === "requests" && <RequestsView requests={requests} />}
+
+          {dataState === "full" && section === "memory" && (
+            <MemoryView prefill={handoffPrefill} runIn={spaces.runIn} showTerminal={() => setSection("terminal")} />
+          )}
 
           {dataState === "full" && section === "settings" && (
             <main className="main-stage main-stage--single">
@@ -1517,6 +1548,8 @@ export function App(): React.JSX.Element {
                       )}
                     </div>
                   </section>
+
+                  <ProvidersSection />
 
                   <section className="settings-section">
                     <div className="settings-aside">

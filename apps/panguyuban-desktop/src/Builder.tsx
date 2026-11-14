@@ -8,13 +8,14 @@ import {
   builderSavePrd,
   HarnessStatus,
 } from "./api";
+import { modelsForHarness, useProviders } from "./providers";
 import {
   agentById,
   agentModel,
   agentFailed,
   agentFor,
   AgentDef,
-  AGENTS,
+  allAgents,
   setAgentModel,
   answeredCount,
   applyAgentReply,
@@ -47,7 +48,8 @@ import {
   isLive,
   keepDesign,
   linesLeft,
-  loadProjects,
+  LEGACY_STORE_KEY,
+  parseProjects,
   lockedDesign,
   looksLikePrd,
   moveStoryToLater,
@@ -61,7 +63,6 @@ import {
   redoInterview,
   resolveChange,
   retryAgent,
-  saveProjects,
   SETUP_STEPS,
   setAssignMode,
   sharePreview,
@@ -74,6 +75,7 @@ import {
   undoLastStep,
   userSays,
 } from "./builder_flow";
+import { usePersisted } from "./persisted";
 import { FilterTabs } from "./ui";
 
 type Tab = "steps" | "preview" | "prd" | "record";
@@ -82,17 +84,20 @@ const SETUP_STEP_MS = 700;
 
 /** Prototypes kept on this machine, with the one being worked on. */
 export function useBuilder(enabled = true) {
-  const [projects, setProjects] = useState<Project[]>(() => loadProjects());
-  const [selectedId, setSelectedId] = useState<string | null>(() => loadProjects()[0]?.id ?? null);
+  const [projects, setProjects, loaded, loadError] = usePersisted<Project[]>("builder", LEGACY_STORE_KEY, parseProjects, []);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
 
   const [harnesses, setHarnesses] = useState<HarnessStatus[]>([]);
+  const providers = useProviders();
 
   // Models per harness, fetched once and kept; "error" means the tool could not list them.
   const [models, setModels] = useState<Record<string, { id: string; label: string }[] | "error">>({});
   const asked = useRef(new Set<string>());
   const [, bump] = useState(0);
 
-  useEffect(() => saveProjects(projects), [projects]);
+  useEffect(() => {
+    if (loaded) setSelectedId((id) => id ?? projects[0]?.id ?? null);
+  }, [loaded]);
 
   useEffect(() => {
     if (!enabled) return;
@@ -105,9 +110,11 @@ export function useBuilder(enabled = true) {
 
   /** Models for a harness: undefined while loading, "error" if it could not be listed. */
   function modelsFor(harness: string) {
-    if (!asked.current.has(harness)) {
+    const isProvider = harness.startsWith("provider:");
+    // A provider's URL arrives with the saved list, so it cannot be asked about before then.
+    if (!asked.current.has(harness) && (!isProvider || providers.some((p) => `provider:${p.id}` === harness))) {
       asked.current.add(harness);
-      builderModels(harness)
+      (isProvider ? modelsForHarness(harness) : builderModels(harness))
         .then((list) => setModels((m) => ({ ...m, [harness]: list })))
         .catch(() => setModels((m) => ({ ...m, [harness]: "error" })));
     }
@@ -140,12 +147,14 @@ export function useBuilder(enabled = true) {
     if (selectedId === id) setSelectedId(rest[0]?.id ?? null);
   }
 
-  /** Agents whose command-line tool is installed here, lead first. */
-  const liveAgents = AGENTS.filter((a) => harnesses.some((h) => h.harness === a.harness && h.available)).map(
-    (a) => agentById(a.id) ?? a
-  );
+  /** Agents whose command-line tool is installed here, lead first, then saved providers (always available). */
+  const liveAgents = allAgents()
+    .filter((a) => a.harness.startsWith("provider:") || harnesses.some((h) => h.harness === a.harness && h.available))
+    .map((a) => agentById(a.id) ?? a);
 
   return {
+    loaded,
+    loadError,
     projects,
     project,
     selectedId,
@@ -248,8 +257,15 @@ function useAgentTurn(builder: Builder, project: Project): "interview" | "plan" 
 export type Builder = ReturnType<typeof useBuilder>;
 
 export function BuilderView({ builder }: { builder: Builder }) {
-  const { project } = builder;
+  const { project, loaded, loadError } = builder;
   const [creating, setCreating] = useState(false);
+
+  if (!loaded)
+    return (
+      <p className="req-empty" role={loadError ? "alert" : undefined}>
+        {loadError ? `Could not read saved prototypes: ${loadError}` : "Loading prototypes…"}
+      </p>
+    );
 
   if (!project || creating) {
     return (
@@ -276,31 +292,48 @@ export function BuilderView({ builder }: { builder: Builder }) {
 
 /** Which model an agent runs. "" keeps the agent's default. Per agent, not per prototype. */
 function ModelPick(props: { builder: Builder; agentId: string; className?: string }) {
-  const base = AGENTS.find((a) => a.id === props.agentId);
+  const base = agentById(props.agentId);
+  const list = base ? props.builder.modelsFor(base.harness) : undefined;
+  const chosen = base ? agentModel(base.id) ?? "" : "";
+  // A provider has no default model, so the first one is picked until the user chooses.
+  const needsModel = !!base?.harness.startsWith("provider:");
+  const first = Array.isArray(list) ? list[0]?.id : undefined;
+  useEffect(() => {
+    if (base && needsModel && !chosen && first) props.builder.setModel(base.id, first);
+  }, [base?.id, needsModel, chosen, first]);
   if (!base) return null;
-  const list = props.builder.modelsFor(base.harness);
-  const chosen = agentModel(base.id) ?? "";
   return (
-    <select
-      className={`input-field ${props.className ?? ""}`}
-      aria-label={`Model for ${base.label}`}
-      value={chosen}
-      onChange={(e) => props.builder.setModel(base.id, e.target.value || null)}
-    >
-      <option value="">Default ({base.model ?? "tool default"})</option>
-      {list === undefined && <option disabled>Loading models…</option>}
-      {list === "error" && <option disabled>Could not list models</option>}
-      {Array.isArray(list) &&
-        list.map((m) => (
-          <option key={m.id} value={m.id}>
-            {m.label}
-          </option>
-        ))}
-      {/* A saved choice the tool no longer lists stays visible instead of silently resetting. */}
-      {chosen && !(Array.isArray(list) && list.some((m) => m.id === chosen)) && (
-        <option value={chosen}>{chosen}</option>
+    <>
+      <select
+        className={`input-field ${props.className ?? ""}`}
+        aria-label={`Model for ${base.label}`}
+        value={chosen}
+        onChange={(e) => props.builder.setModel(base.id, e.target.value || null)}
+      >
+        {!needsModel && <option value="">Default ({base.model ?? "tool default"})</option>}
+        {list === undefined && <option disabled>Loading models…</option>}
+        {list === "error" && <option disabled>Could not list models</option>}
+        {Array.isArray(list) &&
+          list.map((m) => (
+            <option key={m.id} value={m.id}>
+              {m.label}
+            </option>
+          ))}
+        {/* A saved choice the tool no longer lists stays visible instead of silently resetting. */}
+        {chosen && !(Array.isArray(list) && list.some((m) => m.id === chosen)) && (
+          <option value={chosen}>{chosen}</option>
+        )}
+      </select>
+      {needsModel && Array.isArray(list) && !list.length && (
+        <span className="field-help">This provider lists no models. Check it in Settings.</span>
       )}
-    </select>
+      {needsModel && list === "error" && (
+        <span className="field-help">Could not list this provider's models. Test it in Settings.</span>
+      )}
+      {needsModel && chosen && chosen === first && (
+        <span className="field-help">Using the first model in the list; pick another if you want.</span>
+      )}
+    </>
   );
 }
 
@@ -1050,7 +1083,7 @@ function StoryRow(props: {
               onChange={(e) => props.onAssign(e.target.value || null)}
             >
               <option value="">Auto</option>
-              {AGENTS.map((a) => agentById(a.id) ?? a).map((a) => (
+              {allAgents().map((a) => agentById(a.id) ?? a).map((a) => (
                 <option key={a.id} value={a.id}>
                   {a.label}
                   {a.model ? `, ${a.model}` : ""}

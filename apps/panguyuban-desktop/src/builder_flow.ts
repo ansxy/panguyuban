@@ -67,7 +67,8 @@ export type Tier = "lead" | "worker";
 export interface AgentDef {
   id: string;
   label: string;
-  harness: "claude" | "antigravity";
+  /** `provider:<id>` runs on a saved OpenAI-compatible provider. */
+  harness: "claude" | "antigravity" | `provider:${string}`;
   model: string | null;
   tier: Tier;
 }
@@ -981,8 +982,25 @@ export function setAgentModel(id: string, model: string | null) {
   }
 }
 
+/** Saved providers as agents; they have no default model, so one must be picked. */
+let providerAgents: AgentDef[] = [];
+
+export function setProviderAgents(providers: { id: string; name: string }[]) {
+  providerAgents = providers.map((p) => ({
+    id: `provider-${p.id}`,
+    label: p.name,
+    harness: `provider:${p.id}` as const,
+    model: null,
+    tier: "worker" as const,
+  }));
+}
+
+export function allAgents(): AgentDef[] {
+  return [...AGENTS, ...providerAgents];
+}
+
 export function agentById(id: string | null): AgentDef | null {
-  const a = AGENTS.find((a) => a.id === id);
+  const a = allAgents().find((a) => a.id === id);
   return a ? { ...a, model: agentModel(a.id) ?? a.model } : null;
 }
 
@@ -1273,12 +1291,12 @@ export function handoverMarkdown(p: Project): string {
   ].join("\n\n");
 }
 
-const STORE_KEY = "panguyuban.builder.v1";
+/** Where prototypes were kept before they moved to the app database; read once to migrate. */
+export const LEGACY_STORE_KEY = "panguyuban.builder.v1";
 
-export function loadProjects(): Project[] {
+export function parseProjects(raw: string): Project[] {
   try {
-    const raw = window.localStorage.getItem(STORE_KEY);
-    const parsed = raw ? (JSON.parse(raw) as Project[]) : [];
+    const parsed = JSON.parse(raw) as Project[];
     if (!Array.isArray(parsed)) return [];
     // Projects saved by an earlier version get the defaults for newer fields.
     return parsed.map((p) => ({
@@ -1307,13 +1325,5 @@ export function loadProjects(): Project[] {
     }));
   } catch {
     return [];
-  }
-}
-
-export function saveProjects(projects: Project[]): void {
-  try {
-    window.localStorage.setItem(STORE_KEY, JSON.stringify(projects));
-  } catch {
-    /* storage unavailable: the session still works, it just is not kept */
   }
 }
