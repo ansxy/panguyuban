@@ -3390,3 +3390,56 @@ html[data-resizing="row"] {
   flex-wrap: wrap;
   gap: var(--space-xs);
 }
+
+/* Design board (spike) */
+.design-view {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--color-paper);
+}
+.design-bar {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 10px 16px;
+}
+.design-bar textarea {
+  flex: 1 1 320px;
+  font: 12px/1.4 var(--font-mono);
+}
+.design-error {
+  color: var(--color-bad);
+}
+.design-canvas {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+.design-canvas--draw .excalidraw__embeddable-container {
+  z-index: 0;
+}
+.design-ask {
+  position: absolute;
+  z-index: 5; /* above Excalidraw's own UI layer (4) */
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  width: min(440px, 90%);
+  padding: 8px;
+  background: var(--color-paper);
+  border: 1px solid var(--color-rule);
+  border-radius: 8px;
+  box-shadow: 0 6px 24px rgb(0 0 0 / 0.35);
+}
+.design-ask input {
+  flex: 1;
+  min-width: 0;
+}
+.design-ask-close {
+  padding: 0 6px;
+}
+.design-status {
+  padding: 0 16px 8px;
+}

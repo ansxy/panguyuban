@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { Suspense, lazy, useEffect, useState } from "react";
 import {
   approvePr,
   DashboardPayload,
@@ -29,8 +29,10 @@ import { RequestsView, useRequests } from "./Requests";
 import { type HandoffPrefill, MemoryView } from "./Memory";
 import { OverviewView, withSiblingFolders } from "./Overview";
 import { THEMES, applyTheme, savedTheme } from "./theme";
+// Excalidraw and Mermaid stay out of the main bundle until Design is opened.
+const DesignView = lazy(() => import("./Design").then((m) => ({ default: m.DesignView })));
 
-type SectionKey = "overview" | "tickets" | "git" | "agents" | "builder" | "requests" | "memory" | "terminal" | "settings";
+type SectionKey = "overview" | "tickets" | "git" | "agents" | "builder" | "design" | "requests" | "memory" | "terminal" | "settings";
 type DataState = "full" | "loading" | "empty" | "error";
 
 function formatCiState(pr: PullRequest): string {
@@ -151,6 +153,7 @@ export function App(): React.JSX.Element {
     git: "prs",
     agents: "agents",
     builder: "prototypes",
+    design: "design",
     requests: "requests",
     memory: "memory",
   };
@@ -618,6 +621,16 @@ export function App(): React.JSX.Element {
               current={section === "builder"}
               collapsed={layout.sidebarCollapsed}
               onSelect={() => handleMenuSelect("builder")}
+            />
+)}
+            {features.design && (
+<NavItem
+              icon="design"
+              label="Design"
+              hint="Board for screens and diagrams"
+              current={section === "design"}
+              collapsed={layout.sidebarCollapsed}
+              onSelect={() => handleMenuSelect("design")}
             />
 )}
             {features.requests && (
@@ -1274,6 +1287,14 @@ export function App(): React.JSX.Element {
               className={builder.project ? "main-stage main-stage--builder" : "main-stage main-stage--single"}
             >
               <BuilderView builder={builder} />
+            </main>
+          )}
+
+          {dataState === "full" && section === "design" && (
+            <main className="main-stage main-stage--single">
+              <Suspense fallback={null}>
+                <DesignView builder={builder} />
+              </Suspense>
             </main>
           )}
 

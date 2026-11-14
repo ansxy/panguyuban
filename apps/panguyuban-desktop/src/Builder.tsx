@@ -176,7 +176,7 @@ const turnsInFlight = new Set<string>();
  * Runs the agent whenever the prototype is waiting on it: an interview turn, or
  * the plan after the PRD is approved. Returns what it is doing, if anything.
  */
-function useAgentTurn(builder: Builder, project: Project): "interview" | "plan" | "design" | null {
+export function useAgentTurn(builder: Builder, project: Project): "interview" | "plan" | "design" | null {
   const [, rerender] = useState(0);
   const waiting = needsAgentTurn(project);
   const planning = needsPlan(project);
