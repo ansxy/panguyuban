@@ -1,9 +1,10 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
+import { WebLinksAddon } from "@xterm/addon-web-links";
 import "@xterm/xterm/css/xterm.css";
 import { tokenColor } from "./theme";
-import { TermInfo, termClose, termInfo, termOpen, termRead, termResize, termWrite } from "./api";
+import { TermInfo, openMeeting, termClose, termInfo, termOpen, termRead, termResize, termWrite } from "./api";
 
 const INFO_POLL_MS = 1_500;
 
@@ -47,11 +48,14 @@ export function TerminalView(props: {
       fontSize: 13,
       cursorBlink: true,
       theme: theme(),
+      // OSC 8 hyperlinks; xterm's default uses window.open, which the webview ignores.
+      linkHandler: { activate: (_e, url) => void openMeeting(url) },
     });
     const onTheme = () => (term.options.theme = theme());
     window.addEventListener("panguyuban:theme", onTheme);
     const fit = new FitAddon();
     term.loadAddon(fit);
+    term.loadAddon(new WebLinksAddon((_e, url) => void openMeeting(url)));
     term.open(host);
     if (host.clientWidth > 0) fit.fit();
     termRef.current = term;

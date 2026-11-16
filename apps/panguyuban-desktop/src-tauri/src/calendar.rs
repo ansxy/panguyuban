@@ -368,10 +368,10 @@ fn mac_events(from_ms: i64, to_ms: i64) -> Result<Vec<CalendarEvent>, String> {
     }
 }
 
-/// Opens a meeting link in the default browser (or the Zoom/Teams app that claims it).
+/// Opens a meeting or terminal link in the default browser (or the Zoom/Teams app that claims it).
 pub fn open_url(url: &str) -> Result<(), String> {
-    if !url.starts_with("https://") {
-        return Err(format!("Not an https link: {url}"));
+    if !url.starts_with("https://") && !url.starts_with("http://") {
+        return Err(format!("Not a web link: {url}"));
     }
     #[cfg(target_os = "macos")]
     let mut cmd = std::process::Command::new("open");
