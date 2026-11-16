@@ -305,13 +305,15 @@ export async function runTeamReview(builder: Builder, projectId: string, review:
   let local = review;
   /** Returns false when the loop must stop: the review was replaced, or the PRD changed or was approved. */
   const save = (next: TeamReview, note?: string): boolean => {
+    const before = local;
     local = next;
     const cur = builder.projectById(projectId);
     if (!cur) return false;
     // ">" not "!==": the ref lags render, so a missing or older review is not-yet-rendered, not replaced.
     if (cur.teamReview && cur.teamReview.startedAt > local.startedAt) return false;
     if (cur.prdApproved || isStale(local, prdMarkdown(cur))) {
-      const stopped = interrupt(local, Date.now());
+      // The wave's results are dropped: interrupt the state from before them.
+      const stopped = interrupt(before, Date.now());
       builder.updateById(projectId, (p) =>
         p.teamReview?.startedAt === stopped.startedAt ? { ...p, teamReview: stopped } : p,
       );
@@ -960,13 +962,7 @@ function InspectorPane({ builder, project }: { builder: Builder; project: Projec
                 if (!action.run) return;
                 const next = action.run(project);
                 builder.update(action.run);
-                // Approval changes the document, so the saved prd.md is brought in line.
-                if (project.prdText && !project.prdApproved && next.prdApproved) {
-                  const id = project.id;
-                  builderSavePrd({ projectId: id, projectName: project.name, content: prdMarkdown(next) })
-                    .then((path) => builder.updateById(id, (p) => ({ ...p, prdPath: path })))
-                    .catch(() => undefined);
-                }
+                saveApproved(builder, project, next);
                 // The handover goes in the prototype's folder, beside the PRD and the prototype.
                 if (!project.handover && next.handover) {
                   void builderSavePrd({
@@ -1304,22 +1300,26 @@ function PreviewTab({ project }: { project: Project }) {
   );
 }
 
+/** Approval changes the document, so the saved prd.md is brought in line. */
+function saveApproved(builder: Builder, project: Project, next: Project) {
+  if (project.prdText && !project.prdApproved && next.prdApproved) {
+    const id = project.id;
+    builderSavePrd({ projectId: id, projectName: project.name, content: prdMarkdown(next) })
+      .then((path) => builder.updateById(id, (p) => ({ ...p, prdPath: path })))
+      .catch(() => undefined);
+  }
+}
+
 function PrdTab({ builder, project }: { builder: Builder; project: Project }) {
   // Ticks only while a review runs, for the elapsed time.
   const [now, setNow] = useState(Date.now());
-  const [, rerender] = useState(0);
-  useEffect(() => {
-    const l = () => rerender((n) => n + 1);
-    reviewListeners.add(l);
-    return () => void reviewListeners.delete(l);
-  }, []);
+  useReviewInFlight();
   const running = isReviewInFlight(project.id);
-  const ticking = running;
   useEffect(() => {
-    if (!ticking) return;
+    if (!running) return;
     const t = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
-  }, [ticking]);
+  }, [running]);
   if (isLive(project) ? !project.prdText : answeredCount(project) === 0) {
     return (
       <div className="builder-empty">
@@ -1330,7 +1330,10 @@ function PrdTab({ builder, project }: { builder: Builder; project: Project }) {
   }
   const review = project.teamReview;
   const canReview = isLive(project) && !!project.prdText && !project.prdApproved;
-  const fixes = review && reviewState(review) === "done" ? (review.nodes.leader.result?.fixes ?? "") : "";
+  const stale = !!review && isStale(review, prdMarkdown(project));
+  const waiting = awaitingApproval(project);
+  const fixes =
+    review && reviewState(review) === "done" && waiting && !stale ? (review.nodes.leader.result?.fixes ?? "") : "";
   function start() {
     const fresh = startReview(prdMarkdown(project), Date.now());
     builder.update((p) => ({ ...p, teamReview: fresh }));
@@ -1352,7 +1355,15 @@ function PrdTab({ builder, project }: { builder: Builder; project: Project }) {
           </button>
         </div>
       )}
-      {review && <TeamFlow review={review} now={now} running={running} onRetry={retry} />}
+      {review && (
+        <TeamFlow
+          key={review.startedAt}
+          review={review}
+          now={now}
+          running={running}
+          onRetry={!project.prdApproved && !stale ? retry : undefined}
+        />
+      )}
       {review && (
         <div className="action-group">
           {fixes && (
@@ -1360,14 +1371,21 @@ function PrdTab({ builder, project }: { builder: Builder; project: Project }) {
               Apply fixes
             </button>
           )}
-          {canReview && (
-            <button type="button" className="btn" onClick={() => builder.update(approvePrd)}>
+          {canReview && waiting && (
+            <button
+              type="button"
+              className="btn"
+              onClick={() => {
+                builder.update(approvePrd);
+                saveApproved(builder, project, approvePrd(project));
+              }}
+            >
               Approve anyway
             </button>
           )}
         </div>
       )}
-      {review && isStale(review, prdMarkdown(project)) && (
+      {review && stale && !project.prdApproved && (
         <p className="team-flow-note">
           PRD changed since this review.{" "}
           {canReview && (

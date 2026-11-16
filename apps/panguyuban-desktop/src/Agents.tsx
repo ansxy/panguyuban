@@ -277,7 +277,7 @@ export function AgentsView(props: {
             <button type="button" className="btn" onClick={() => props.onOpenTeam(shownTeam.projectId)}>
               Open in Prototypes →
             </button>
-            <TeamFlow review={shownTeam.review} now={now} running={isReviewInFlight(shownTeam.projectId)} />
+            <TeamFlow key={shownTeam.projectId} review={shownTeam.review} now={now} running={isReviewInFlight(shownTeam.projectId)} />
           </>
         ) : active ? (
           <AgentDetail key={active.session_id} session={active} now={now} focusButton={props.focusButton} onEnded={props.agents.refresh} onHandOff={props.onHandOff} />

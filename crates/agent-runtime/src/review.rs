@@ -62,8 +62,10 @@ pub struct RoleReview {
 
 #[derive(Deserialize)]
 struct RawFinding {
+    #[serde(default)]
     severity: String,
-    step: Option<String>,
+    #[serde(default)]
+    step: serde_json::Value,
     text: String,
 }
 
@@ -73,7 +75,7 @@ struct RawReview {
     #[serde(default)]
     verdict: String,
     #[serde(default)]
-    fixes: String,
+    fixes: serde_json::Value,
 }
 
 pub fn review_system_prompt(role: ReviewRole) -> String {
@@ -131,10 +133,12 @@ pub fn parse_review(
         .into_iter()
         .take(MAX_FINDINGS)
         .map(|f| {
-            let step = f
-                .step
-                .map(|s| s.trim().to_uppercase())
-                .filter(|s| step_ids.contains(s));
+            let step = match &f.step {
+                serde_json::Value::String(s) => Some(s.trim().to_uppercase()),
+                serde_json::Value::Number(n) => Some(format!("S{n}")),
+                _ => None,
+            }
+            .filter(|s| step_ids.contains(s));
             Finding {
                 severity: if f.severity.trim().eq_ignore_ascii_case("blocker") {
                     Severity::Blocker
@@ -150,7 +154,16 @@ pub fn parse_review(
         role,
         findings,
         verdict: parsed.verdict.trim().to_string(),
-        fixes: parsed.fixes.trim().to_string(),
+        fixes: match parsed.fixes {
+            serde_json::Value::String(s) => s.trim().to_string(),
+            serde_json::Value::Array(a) => a
+                .iter()
+                .filter_map(|v| v.as_str())
+                .map(str::trim)
+                .collect::<Vec<_>>()
+                .join("\n"),
+            _ => String::new(),
+        },
     })
 }
 
@@ -247,12 +260,31 @@ mod tests {
     }
 
     #[test]
+    fn missing_severity_becomes_suggestion() {
+        let r = parse_review(ReviewRole::Qa, r#"{"findings":[{"text":"x"}]}"#, &ids()).unwrap();
+        assert_eq!(r.findings[0].severity, Severity::Suggestion);
+    }
+
+    #[test]
+    fn numeric_step_is_coerced() {
+        let raw = r#"{"findings":[{"severity":"blocker","step":1,"text":"a"},{"severity":"blocker","step":{"x":1},"text":"b"}]}"#;
+        let r = parse_review(ReviewRole::Qa, raw, &ids()).unwrap();
+        assert_eq!(r.findings[0].step.as_deref(), Some("S1"));
+        assert_eq!(r.findings[1].step, None);
+    }
+
+    #[test]
+    fn fixes_array_is_joined() {
+        let raw = r#"{"findings":[],"fixes":["One"," Two"]}"#;
+        let r = parse_review(ReviewRole::Leader, raw, &ids()).unwrap();
+        assert_eq!(r.fixes, "One\nTwo");
+    }
+
+    #[test]
     fn system_prompt_names_role_and_forbids_tools() {
-        let headings = ["## Engineer", "## UX", "## QA", "## Contrarian", "## Leader"];
-        for (role, heading) in ROLES.into_iter().zip(headings) {
+        for role in ROLES {
             let p = review_system_prompt(role);
-            assert!(p.contains(heading), "{heading}");
-            assert!(p.contains("You are the"));
+            assert!(p.contains(&format!("You are the {}", role.label())), "{}", role.label());
             assert!(p.contains("You have no tools"));
             assert!(!p.contains("name: prd-review"));
         }
