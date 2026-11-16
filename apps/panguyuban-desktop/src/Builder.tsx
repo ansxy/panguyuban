@@ -288,6 +288,16 @@ export function isReviewInFlight(projectId: string): boolean {
   return reviewsInFlight.has(projectId);
 }
 
+/** Rerenders the caller whenever any review starts or stops. */
+export function useReviewInFlight(): void {
+  const [, rerender] = useState(0);
+  useEffect(() => {
+    const l = () => rerender((n) => n + 1);
+    reviewListeners.add(l);
+    return () => void reviewListeners.delete(l);
+  }, []);
+}
+
 /** Runs the review wave by wave, saving each result as it lands; late results for a changed PRD or newer review are dropped. */
 export async function runTeamReview(builder: Builder, projectId: string, review: TeamReview): Promise<void> {
   if (reviewsInFlight.has(projectId)) return;

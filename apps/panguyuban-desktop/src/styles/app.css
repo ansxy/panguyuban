@@ -3497,3 +3497,9 @@ html[data-resizing="row"] {
   .team-flow-node.is-working .team-flow-dot { animation: team-flow-pulse 1.2s ease-in-out infinite; }
 }
 @keyframes team-flow-pulse { 50% { opacity: 0.35; } }
+
+.agents-strip { display: flex; gap: 2px; }
+.agents-strip > span { flex: 1; height: 4px; border-radius: 2px; background: var(--color-rule-2); }
+.agents-strip > .is-working { background: var(--color-accent); }
+.agents-strip > .is-done { background: var(--color-ok); }
+.agents-strip > .is-failed { background: var(--color-bad); }

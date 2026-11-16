@@ -11,6 +11,12 @@ import {
   UsageReport,
 } from "./api";
 import { FilterTabs, Icon } from "./ui";
+import { isReviewInFlight, useReviewInFlight } from "./Builder";
+import { ROLE_LABEL, reviewSummary, type TeamReview } from "./team_review";
+import { TeamFlow } from "./TeamFlow";
+
+export type TeamEntry = { projectId: string; name: string; agentLabel: string; review: TeamReview };
+const TEAM_ROLES = ["engineer", "ux", "qa", "contrarian", "leader"] as const;
 
 const SESSION_POLL_MS = 3_000;
 const USAGE_POLL_MS = 45_000;
@@ -108,7 +114,10 @@ export function AgentsView(props: {
   focusButton: React.ReactNode;
   /** Opens a handoff of this folder; absent when the Memory feature is off. */
   onHandOff?: (cwd: string, name: string) => void;
+  teams: TeamEntry[];
+  onOpenTeam: (projectId: string) => void;
 }) {
+  useReviewInFlight();
   const { sessions, usage, error, selectedId, setSelectedId } = props.agents;
   const [filter, setFilter] = useState<StatusFilter>("all");
   const now = useNow(5_000);
@@ -122,7 +131,15 @@ export function AgentsView(props: {
   const groups = (["waiting", "busy", "idle"] as const)
     .map((status) => ({ status, items: visible.filter((s) => s.status === status) }))
     .filter((g) => g.items.length > 0);
-  const count = (st: AgentStatus) => sessions.filter((s) => s.status === st).length;
+  // A team is Working only while its review is actually executing; a stored "running" review may be stale.
+  const teamStatus = (t: TeamEntry): AgentStatus => (isReviewInFlight(t.projectId) ? "busy" : "idle");
+  const visibleTeams = props.teams.filter((t) => filter === "all" || teamStatus(t) === filter);
+  const teamSort = (t: TeamEntry) => (isReviewInFlight(t.projectId) ? 0 : 1);
+  visibleTeams.sort((a, b) => teamSort(a) - teamSort(b) || b.review.startedAt - a.review.startedAt);
+  const activeTeam = visibleTeams.find((t) => "team:" + t.projectId === selectedId);
+  const total = sessions.length + props.teams.length;
+  const count = (st: AgentStatus) =>
+    sessions.filter((s) => s.status === st).length + props.teams.filter((t) => teamStatus(t) === st).length;
 
   return (
     <>
@@ -133,7 +150,7 @@ export function AgentsView(props: {
         </div>
         <div className="pane-header">
           <h1>Agents</h1>
-          <span className="measured">{sessions.length}</span>
+          <span className="measured">{total}</span>
         </div>
 
         <FilterTabs
@@ -141,7 +158,7 @@ export function AgentsView(props: {
           value={filter}
           onChange={setFilter}
           options={[
-            { value: "all", label: "All", count: sessions.length },
+            { value: "all", label: "All", count: total },
             { value: "waiting", label: "Needs you", count: count("waiting") },
             { value: "busy", label: "Working", count: count("busy") },
             { value: "idle", label: "Idle", count: count("idle") },
@@ -150,9 +167,50 @@ export function AgentsView(props: {
 
         {error && <p className="agent-error">Could not read agents: {error}</p>}
 
-        {visible.length === 0 ? (
+        {visibleTeams.length > 0 && (
+          <section className="ticket-group" aria-label="Team reviews">
+            <div className="ticket-group-head">
+              <h2>Team reviews</h2>
+              <span className="measured">{visibleTeams.length}</span>
+            </div>
+            <ul className="ticket-rows">
+              {visibleTeams.map((t) => {
+                const selected = !!activeTeam && t.projectId === activeTeam.projectId;
+                const inFlight = isReviewInFlight(t.projectId);
+                return (
+                  <li key={t.projectId}>
+                    <button
+                      type="button"
+                      className="ticket-row"
+                      data-selected={selected ? "true" : "false"}
+                      aria-current={selected ? "true" : undefined}
+                      onClick={() => setSelectedId("team:" + t.projectId)}
+                    >
+                      <span className="ticket-row-top">
+                        <span className="agents-name">{t.name}</span>
+                        <span className="agents-since">{duration(now - (inFlight ? t.review.startedAt : t.review.finishedAt ?? t.review.startedAt))}</span>
+                      </span>
+                      <span className="agents-meta">
+                        <span className="agents-meta-path">
+                          PRD review · {t.agentLabel} · {reviewSummary(t.review)}
+                        </span>
+                      </span>
+                      <span className="agents-strip" aria-hidden="true">
+                        {TEAM_ROLES.map((r) => (
+                          <span key={r} className={`is-${t.review.nodes[r].status}`} title={ROLE_LABEL[r]} />
+                        ))}
+                      </span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          </section>
+        )}
+
+        {visible.length === 0 && visibleTeams.length === 0 ? (
           <p className="agent-empty">
-            {sessions.length === 0
+            {sessions.length === 0 && props.teams.length === 0
               ? "No agent sessions running. Start claude or Antigravity in a terminal and it shows up here."
               : "No sessions match this filter."}
           </p>
@@ -165,7 +223,7 @@ export function AgentsView(props: {
               </div>
               <ul className="ticket-rows">
                 {group.items.map((s) => {
-                  const selected = s.session_id === active?.session_id;
+                  const selected = !activeTeam && s.session_id === active?.session_id;
                   const running = s.subagents.filter((a) => !a.finished).length;
                   return (
                     <li key={s.session_id}>
@@ -205,7 +263,21 @@ export function AgentsView(props: {
       </section>
 
       <section className="pane pane--detail ticket-detail" aria-label="Selected agent session">
-        {active ? (
+        {activeTeam ? (
+          <>
+            <div className="pane-header">
+              <h2>{activeTeam.name}</h2>
+              <div className="pane-tools">{props.focusButton}</div>
+            </div>
+            <p className="agents-meta">
+              PRD review · {activeTeam.agentLabel} · started {duration(now - activeTeam.review.startedAt)} ago
+            </p>
+            <button type="button" className="btn" onClick={() => props.onOpenTeam(activeTeam.projectId)}>
+              Open in Prototypes →
+            </button>
+            <TeamFlow review={activeTeam.review} now={now} running={isReviewInFlight(activeTeam.projectId)} />
+          </>
+        ) : active ? (
           <AgentDetail key={active.session_id} session={active} now={now} focusButton={props.focusButton} onEnded={props.agents.refresh} onHandOff={props.onHandOff} />
         ) : (
           <div className="pane-header">

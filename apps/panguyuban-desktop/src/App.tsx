@@ -24,6 +24,7 @@ import {
 import { DiffFiles, FilterTabs, Icon, type IconName, Logo } from "./ui";
 import { AgentsView, shortPath, SidebarAgents, useAgents } from "./Agents";
 import { BuilderView, useBuilder } from "./Builder";
+import { agentById } from "./builder_flow";
 import { ProvidersSection } from "./ProvidersSettings";
 import { FEATURES, type FeatureKey, useFeatures } from "./features";
 import { SidebarSpaces, TerminalStages, useSpaces } from "./Spaces";
@@ -1277,6 +1278,15 @@ export function App(): React.JSX.Element {
             <main className="main-stage" data-focus={layout.detailFocused || undefined}>
               <AgentsView
                 agents={agents}
+                teams={builder.projects.flatMap((p) =>
+                  p.teamReview
+                    ? [{ projectId: p.id, name: p.name, agentLabel: agentById(p.interviewAgent)?.label ?? "Agent", review: p.teamReview }]
+                    : []
+                )}
+                onOpenTeam={(id) => {
+                  builder.select(id);
+                  setSection("builder");
+                }}
                 splitter={
                   <Splitter
                     label="Resize list"
