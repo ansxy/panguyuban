@@ -14,6 +14,7 @@ import { TeamFlow } from "./TeamFlow";
 import type { ReviewRole } from "./api";
 import {
   earlierFor,
+  interrupt,
   isStale,
   nextWave,
   retryFrom,
@@ -122,6 +123,10 @@ export function useBuilder(enabled = true) {
   }, [enabled]);
 
   const project = projects.find((p) => p.id === selectedId) ?? null;
+  // Latest projects, readable from async loops that outlive a render.
+  const latest = useRef(projects);
+  latest.current = projects;
+  const projectById = (id: string): Project | undefined => latest.current.find((p) => p.id === id);
 
   /** Models for a harness: undefined while loading, "error" if it could not be listed. */
   function modelsFor(harness: string) {
@@ -176,6 +181,7 @@ export function useBuilder(enabled = true) {
     select: setSelectedId,
     update,
     updateById,
+    projectById,
     create,
     remove,
     liveAgents,
@@ -271,20 +277,41 @@ export function useAgentTurn(builder: Builder, project: Project): "interview" | 
 
 /** Reviews running. Module-level so a re-mount cannot start a second run for one project. */
 const reviewsInFlight = new Set<string>();
+const reviewListeners = new Set<() => void>();
+const setInFlight = (id: string, on: boolean) => {
+  if (on) reviewsInFlight.add(id);
+  else reviewsInFlight.delete(id);
+  reviewListeners.forEach((l) => l());
+};
+
+export function isReviewInFlight(projectId: string): boolean {
+  return reviewsInFlight.has(projectId);
+}
 
 /** Runs the review wave by wave, saving each result as it lands; late results for a changed PRD or newer review are dropped. */
 export async function runTeamReview(builder: Builder, projectId: string, review: TeamReview): Promise<void> {
   if (reviewsInFlight.has(projectId)) return;
-  reviewsInFlight.add(projectId);
+  setInFlight(projectId, true);
   let local = review;
-  const save = (next: TeamReview, note?: string) => {
+  /** Returns false when the loop must stop: the review was replaced, or the PRD changed or was approved. */
+  const save = (next: TeamReview, note?: string): boolean => {
     local = next;
+    const cur = builder.projectById(projectId);
+    if (!cur?.teamReview || cur.teamReview.startedAt !== local.startedAt) return false;
+    if (cur.prdApproved || isStale(cur.teamReview, prdMarkdown(cur))) {
+      const stopped = interrupt(cur.teamReview, Date.now());
+      builder.updateById(projectId, (p) =>
+        p.teamReview?.startedAt === stopped.startedAt ? { ...p, teamReview: stopped } : p,
+      );
+      return false;
+    }
     builder.updateById(projectId, (p) => {
       if (!p.teamReview || p.prdApproved || p.teamReview.startedAt !== next.startedAt) return p;
       if (isStale(p.teamReview, prdMarkdown(p))) return p;
       const saved = { ...p, teamReview: next };
       return note ? record(saved, "review", note) : saved;
     });
+    return true;
   };
   try {
     for (;;) {
@@ -292,15 +319,15 @@ export async function runTeamReview(builder: Builder, projectId: string, review:
       if (!wave.length) break;
       let marked = local;
       for (const role of wave) marked = setNode(marked, role, { status: "working", error: null }, Date.now());
-      save(marked);
-      const agent = agentById(builder.projects.find((p) => p.id === projectId)?.interviewAgent ?? null);
+      if (!save(marked)) break;
+      const agent = agentById(builder.projectById(projectId)?.interviewAgent ?? null);
       const base = local;
       const results = await Promise.allSettled(
         wave.map((role) => {
           if (!agent) return Promise.reject("No agent connected");
           return builderReviewStep({
             projectId,
-            projectName: builder.projects.find((p) => p.id === projectId)?.name ?? "",
+            projectName: builder.projectById(projectId)?.name ?? "",
             harness: agent.harness,
             model: agent.model,
             role,
@@ -316,15 +343,15 @@ export async function runTeamReview(builder: Builder, projectId: string, review:
           wave[i],
           r.status === "fulfilled"
             ? { status: "done", result: r.value, error: null }
-            : { status: "failed", error: String(r.reason) },
+            : { status: "failed", error: r.reason instanceof Error ? r.reason.message : String(r.reason) },
           Date.now(),
         );
       });
       const finished = reviewState(local) === "running" && reviewState(next) !== "running";
-      save(next, finished ? "Team review: " + reviewSummary(next) : undefined);
+      if (!save(next, finished ? "Team review: " + reviewSummary(next) : undefined)) break;
     }
   } finally {
-    reviewsInFlight.delete(projectId);
+    setInFlight(projectId, false);
   }
 }
 
@@ -1268,7 +1295,14 @@ function PreviewTab({ project }: { project: Project }) {
 function PrdTab({ builder, project }: { builder: Builder; project: Project }) {
   // Ticks only while a review runs, for the elapsed time.
   const [now, setNow] = useState(Date.now());
-  const ticking = !!project.teamReview && reviewState(project.teamReview) === "running";
+  const [, rerender] = useState(0);
+  useEffect(() => {
+    const l = () => rerender((n) => n + 1);
+    reviewListeners.add(l);
+    return () => void reviewListeners.delete(l);
+  }, []);
+  const running = isReviewInFlight(project.id);
+  const ticking = running;
   useEffect(() => {
     if (!ticking) return;
     const t = setInterval(() => setNow(Date.now()), 1000);
@@ -1284,7 +1318,6 @@ function PrdTab({ builder, project }: { builder: Builder; project: Project }) {
   }
   const review = project.teamReview;
   const canReview = isLive(project) && !!project.prdText && !project.prdApproved;
-  const running = !!review && reviewState(review) === "running";
   const fixes = review && reviewState(review) === "done" ? (review.nodes.leader.result?.fixes ?? "") : "";
   function start() {
     const fresh = startReview(prdMarkdown(project), Date.now());
@@ -1307,7 +1340,7 @@ function PrdTab({ builder, project }: { builder: Builder; project: Project }) {
           </button>
         </div>
       )}
-      {review && <TeamFlow review={review} now={now} onRetry={retry} />}
+      {review && <TeamFlow review={review} now={now} running={running} onRetry={retry} />}
       {review && (
         <div className="action-group">
           {fixes && (

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { ReviewRole } from "./api";
 import { duration } from "./Agents";
-import { reviewState, ROLE_LABEL, SPECIALISTS, type ReviewNode, type TeamReview } from "./team_review";
+import { ROLE_LABEL, SPECIALISTS, type ReviewNode, type TeamReview } from "./team_review";
 
 function caption(n: ReviewNode): string {
   if (n.status === "done") {
@@ -11,17 +11,24 @@ function caption(n: ReviewNode): string {
   return n.status === "working" ? "working…" : n.status;
 }
 
+function counts(r: NonNullable<ReviewNode["result"]>): string {
+  const n = (sev: string) => r.findings.filter((f) => f.severity === sev).length;
+  const part = (c: number, w: string) => `${c} ${w}${c === 1 ? "" : "s"}`;
+  return `${part(n("blocker"), "blocker")} · ${part(n("suggestion"), "suggestion")}`;
+}
+
 export function TeamFlow({
   review,
   now,
+  running,
   onRetry,
 }: {
   review: TeamReview;
   now: number;
+  running: boolean;
   onRetry?: (role: ReviewRole) => void;
 }) {
   const [picked, setPicked] = useState<ReviewRole | null>(null);
-  const running = reviewState(review) === "running";
   const node = (role: ReviewRole) => {
     const n = review.nodes[role];
     return (
@@ -66,6 +73,7 @@ export function TeamFlow({
         <div className="team-flow-detail">
           <strong>Leader verdict</strong>
           <p>{verdict.verdict}</p>
+          <p className="field-help">{counts(verdict)}</p>
           <Findings role={verdict} />
         </div>
       )}

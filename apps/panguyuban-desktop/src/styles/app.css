@@ -3483,6 +3483,7 @@ html[data-resizing="row"] {
 .team-flow-node:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 2px; }
 .team-flow-sub { grid-column: 2; font-size: var(--text-xs); color: var(--color-muted); }
 .team-flow-dot { grid-row: span 2; width: 10px; height: 10px; border-radius: 50%; background: var(--color-rule-2); }
+.team-flow-node.is-working { border-style: dashed; border-color: var(--color-accent); }
 .team-flow-node.is-working .team-flow-dot { background: var(--color-accent); }
 .team-flow-node.is-done .team-flow-dot { background: var(--color-ok); }
 .team-flow-node.is-failed .team-flow-dot { background: var(--color-bad); }
