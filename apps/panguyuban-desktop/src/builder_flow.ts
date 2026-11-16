@@ -8,6 +8,8 @@
  * rules can move into panguyuban-core once an agent runtime is connected.
  */
 
+import { interrupt, type TeamReview } from "./team_review";
+
 export type Stage =
   | "interview"
   | "prototype"
@@ -107,7 +109,7 @@ export interface Story {
 
 export interface LogEntry {
   at: number;
-  kind: "start" | "prd" | "scope" | "build" | "undo" | "engineer" | "show" | "handover" | "agents" | "design";
+  kind: "start" | "prd" | "scope" | "build" | "undo" | "engineer" | "show" | "handover" | "agents" | "design" | "review";
   text: string;
 }
 
@@ -146,6 +148,8 @@ export interface Project {
   designPending: boolean;
   /** "approved" by the user, "skipped" when the agent could not produce one, or "no" before either. */
   designStatus: "no" | "approved" | "skipped";
+  /** The team review of the PRD, once run. */
+  teamReview: TeamReview | null;
   /** Index of the interview question being asked; QUESTIONS.length = all answered. */
   interviewStep: number;
   answers: Record<string, string>;
@@ -372,6 +376,7 @@ export function createProject(
     designChanges: [],
     designPending: false,
     designStatus: "no",
+    teamReview: null,
     interviewStep: 0,
     answers: {},
     prdApproved: false,
@@ -1312,6 +1317,7 @@ export function parseProjects(raw: string): Project[] {
       designChanges: p.designChanges ?? [],
       designPending: p.designPending ?? false,
       designStatus: p.designStatus ?? "no",
+      teamReview: p.teamReview ? interrupt(p.teamReview) : null,
       building: p.building ?? false,
       built: p.built ?? false,
       assignMode: p.assignMode ?? "autopilot",
