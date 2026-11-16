@@ -251,7 +251,7 @@ function say(p: Project, from: Message["from"], text: string): Project {
   return { ...p, messages: [...p.messages, { from, text, at: now() }] };
 }
 
-function record(p: Project, kind: LogEntry["kind"], text: string): Project {
+export function record(p: Project, kind: LogEntry["kind"], text: string): Project {
   return { ...p, log: [...p.log, { at: now(), kind, text }] };
 }
 

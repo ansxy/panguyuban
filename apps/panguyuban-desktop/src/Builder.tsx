@@ -5,10 +5,24 @@ import {
   builderInterviewTurn,
   builderModels,
   builderPlan,
+  builderReviewStep,
   builderSavePrd,
   HarnessStatus,
 } from "./api";
 import { modelsForHarness, useProviders } from "./providers";
+import { TeamFlow } from "./TeamFlow";
+import type { ReviewRole } from "./api";
+import {
+  earlierFor,
+  isStale,
+  nextWave,
+  retryFrom,
+  reviewState,
+  reviewSummary,
+  setNode,
+  startReview,
+  type TeamReview,
+} from "./team_review";
 import {
   agentById,
   agentModel,
@@ -22,6 +36,7 @@ import {
   applyDesign,
   applyPlan,
   approvePrd,
+  record,
   askEngineer,
   AssignMode,
   assignStory,
@@ -252,6 +267,65 @@ export function useAgentTurn(builder: Builder, project: Project): "interview" | 
   if (!turnsInFlight.has(project.id)) return null;
   if (project.stage === "prototype") return "design";
   return project.stage === "plan" ? "plan" : "interview";
+}
+
+/** Reviews running. Module-level so a re-mount cannot start a second run for one project. */
+const reviewsInFlight = new Set<string>();
+
+/** Runs the review wave by wave, saving each result as it lands; late results for a changed PRD or newer review are dropped. */
+export async function runTeamReview(builder: Builder, projectId: string, review: TeamReview): Promise<void> {
+  if (reviewsInFlight.has(projectId)) return;
+  reviewsInFlight.add(projectId);
+  let local = review;
+  const save = (next: TeamReview, note?: string) => {
+    local = next;
+    builder.updateById(projectId, (p) => {
+      if (!p.teamReview || p.prdApproved || p.teamReview.startedAt !== next.startedAt) return p;
+      if (isStale(p.teamReview, prdMarkdown(p))) return p;
+      const saved = { ...p, teamReview: next };
+      return note ? record(saved, "review", note) : saved;
+    });
+  };
+  try {
+    for (;;) {
+      const wave = nextWave(local);
+      if (!wave.length) break;
+      let marked = local;
+      for (const role of wave) marked = setNode(marked, role, { status: "working", error: null }, Date.now());
+      save(marked);
+      const agent = agentById(builder.projects.find((p) => p.id === projectId)?.interviewAgent ?? null);
+      const base = local;
+      const results = await Promise.allSettled(
+        wave.map((role) => {
+          if (!agent) return Promise.reject("No agent connected");
+          return builderReviewStep({
+            projectId,
+            projectName: builder.projects.find((p) => p.id === projectId)?.name ?? "",
+            harness: agent.harness,
+            model: agent.model,
+            role,
+            prd: base.prd,
+            earlier: earlierFor(base, role),
+          });
+        }),
+      );
+      let next = local;
+      results.forEach((r, i) => {
+        next = setNode(
+          next,
+          wave[i],
+          r.status === "fulfilled"
+            ? { status: "done", result: r.value, error: null }
+            : { status: "failed", error: String(r.reason) },
+          Date.now(),
+        );
+      });
+      const finished = reviewState(local) === "running" && reviewState(next) !== "running";
+      save(next, finished ? "Team review: " + reviewSummary(next) : undefined);
+    }
+  } finally {
+    reviewsInFlight.delete(projectId);
+  }
 }
 
 export type Builder = ReturnType<typeof useBuilder>;
@@ -1192,6 +1266,14 @@ function PreviewTab({ project }: { project: Project }) {
 }
 
 function PrdTab({ builder, project }: { builder: Builder; project: Project }) {
+  // Ticks only while a review runs, for the elapsed time.
+  const [now, setNow] = useState(Date.now());
+  const ticking = !!project.teamReview && reviewState(project.teamReview) === "running";
+  useEffect(() => {
+    if (!ticking) return;
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [ticking]);
   if (isLive(project) ? !project.prdText : answeredCount(project) === 0) {
     return (
       <div className="builder-empty">
@@ -1200,9 +1282,59 @@ function PrdTab({ builder, project }: { builder: Builder; project: Project }) {
       </div>
     );
   }
+  const review = project.teamReview;
+  const canReview = isLive(project) && !!project.prdText && !project.prdApproved;
+  const running = !!review && reviewState(review) === "running";
+  const fixes = review && reviewState(review) === "done" ? (review.nodes.leader.result?.fixes ?? "") : "";
+  function start() {
+    const fresh = startReview(prdMarkdown(project), Date.now());
+    builder.update((p) => ({ ...p, teamReview: fresh }));
+    void runTeamReview(builder, project.id, fresh);
+  }
+  function retry(role: ReviewRole) {
+    if (!review) return;
+    const again = retryFrom(review, role);
+    builder.update((p) => ({ ...p, teamReview: again }));
+    void runTeamReview(builder, project.id, again);
+  }
   return (
     <>
       {project.prdPath && <span className="field-help">Saved to {project.prdPath}</span>}
+      {canReview && (
+        <div className="action-group">
+          <button type="button" className="btn" disabled={running} onClick={start}>
+            {review ? "Run again" : "Review with team"}
+          </button>
+        </div>
+      )}
+      {review && <TeamFlow review={review} now={now} onRetry={retry} />}
+      {review && (
+        <div className="action-group">
+          {fixes && (
+            <button type="button" className="btn" onClick={() => builder.update((p) => userSays(p, fixes))}>
+              Apply fixes
+            </button>
+          )}
+          {canReview && (
+            <button type="button" className="btn" onClick={() => builder.update(approvePrd)}>
+              Approve anyway
+            </button>
+          )}
+        </div>
+      )}
+      {review && isStale(review, prdMarkdown(project)) && (
+        <p className="team-flow-note">
+          PRD changed since this review.{" "}
+          {canReview && (
+            <button type="button" className="btn" disabled={running} onClick={start}>
+              Run again
+            </button>
+          )}
+        </p>
+      )}
+      {review && reviewState(review) === "stopped" && (
+        <p className="team-flow-note">No specialist could finish, so the review stopped.</p>
+      )}
       <pre className="doc-view">{prdMarkdown(project)}</pre>
       {project.stage === "interview" && !isLive(project) && !project.prdText && (
         <div className="action-group">
