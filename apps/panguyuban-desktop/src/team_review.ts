@@ -47,7 +47,7 @@ export function setNode(
   now: number,
 ): TeamReview {
   const next: TeamReview = { ...r, nodes: { ...r.nodes, [role]: { ...r.nodes[role], ...patch } } };
-  if (reviewState(next) !== "running") next.finishedAt = now;
+  if (next.finishedAt === null && reviewState(next) !== "running") next.finishedAt = now;
   return next;
 }
 
@@ -82,12 +82,14 @@ export function retryFrom(r: TeamReview, role: ReviewRole): TeamReview {
   return { ...r, finishedAt: null, nodes };
 }
 
-export function interrupt(r: TeamReview): TeamReview {
+export function interrupt(r: TeamReview, now: number): TeamReview {
   const nodes = { ...r.nodes };
   for (const k of ROLES) {
     if (nodes[k].status === "working") nodes[k] = { ...nodes[k], status: "failed", error: "Interrupted, run again" };
   }
-  return { ...r, nodes };
+  const next: TeamReview = { ...r, nodes };
+  if (next.finishedAt === null && reviewState(next) !== "running") next.finishedAt = now;
+  return next;
 }
 
 export function isStale(r: TeamReview, prd: string): boolean {

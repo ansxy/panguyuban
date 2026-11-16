@@ -1317,7 +1317,7 @@ export function parseProjects(raw: string): Project[] {
       designChanges: p.designChanges ?? [],
       designPending: p.designPending ?? false,
       designStatus: p.designStatus ?? "no",
-      teamReview: p.teamReview ? interrupt(p.teamReview) : null,
+      teamReview: p.teamReview ? interrupt(p.teamReview, Date.now()) : null,
       building: p.building ?? false,
       built: p.built ?? false,
       assignMode: p.assignMode ?? "autopilot",

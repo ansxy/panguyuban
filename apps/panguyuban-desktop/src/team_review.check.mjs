@@ -63,7 +63,7 @@ const all = () => {
 
 // interrupt_marks_working_nodes_failed
 {
-  const r = interrupt(work(done(startReview("p", 0), "engineer"), "ux"));
+  const r = interrupt(work(done(startReview("p", 0), "engineer"), "ux"), 9);
   assert.equal(r.nodes.ux.status, "failed");
   assert.equal(r.nodes.ux.error, "Interrupted, run again");
   assert.equal(r.nodes.engineer.status, "done");
@@ -80,4 +80,21 @@ assert.equal(isStale(startReview("a", 0), "b"), true);
   ]);
   assert.equal(reviewSummary(r), "done · 1 blocker");
   assert.equal(reviewSummary(startReview("p", 0)), "0 of 5 done");
+}
+
+// finished_at_set_only_on_transition
+{
+  const r = fail(all(), "leader");
+  assert.notEqual(r.finishedAt, null);
+  const r2 = setNode(r, "qa", { status: "done" }, 999);
+  assert.equal(r2.finishedAt, r.finishedAt);
+}
+
+// interrupt_finishes_when_nothing_left
+{
+  let r = startReview("p", 0);
+  for (const k of ["engineer", "ux", "qa"]) r = work(r, k);
+  r = interrupt(r, 5);
+  assert.equal(reviewState(r), "stopped");
+  assert.equal(r.finishedAt, 5);
 }
