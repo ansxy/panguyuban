@@ -284,6 +284,7 @@ mod tests {
             title: "Fix JWT refresh race".into(),
             description: "Initial".into(),
             state: TicketState::Todo,
+            status: String::new(),
             assignee: Some("@ansar".into()),
             priority: Some("high".into()),
             updated_at: "2026-11-11T02:00:00Z".into(),

@@ -13,7 +13,8 @@ use std::sync::Arc;
 use panguyuban_core::error::CoreError;
 use panguyuban_core::linker::format_branch_name;
 use panguyuban_core::models::{
-    CiState, MergeMethod, PullRequest, ReviewState, Ticket, TicketState, WorkspaceConfig,
+    CiState, MergeMethod, PullRequest, ReviewState, Ticket, TicketState, TicketStatus,
+    WorkspaceConfig,
 };
 use panguyuban_core::service::WorkflowService;
 use panguyuban_core::storage::SqliteStore;
@@ -282,6 +283,37 @@ impl DesktopController {
         self.transition_cached_ticket(ticket_key, next_state)
     }
 
+    pub async fn ticket_statuses(&self, ticket_key: &str) -> Result<Vec<TicketStatus>, CoreError> {
+        if self.has_live_providers() {
+            let svc = self.build_workflow_service()?;
+            return svc.issue_provider().ticket_statuses(ticket_key).await;
+        }
+        // No tracker connected: the buckets themselves, with the bucket as the id.
+        Ok([
+            (TicketState::Backlog, "Backlog"),
+            (TicketState::Todo, "Todo"),
+            (TicketState::InProgress, "In progress"),
+            (TicketState::InReview, "In review"),
+            (TicketState::Done, "Done"),
+            (TicketState::Cancelled, "Cancelled"),
+        ]
+        .into_iter()
+        .map(|(state, name)| TicketStatus { id: format!("{state:?}"), name: name.into(), state })
+        .collect())
+    }
+
+    pub async fn execute_move_ticket(&self, ticket_key: &str, status_id: &str) -> Result<Ticket, CoreError> {
+        if self.has_live_providers() {
+            let svc = self.build_workflow_service()?;
+            let updated = svc.issue_provider().move_ticket(ticket_key, status_id).await?;
+            self.store.upsert_tickets(std::slice::from_ref(&updated))?;
+            return Ok(updated);
+        }
+        let state: TicketState = serde_json::from_value(serde_json::Value::String(status_id.into()))
+            .map_err(|_| CoreError::NotFound(format!("Unknown status {status_id}")))?;
+        self.transition_cached_ticket(ticket_key, state)
+    }
+
     pub async fn execute_approve_pr(
         &self,
         repo: &str,
@@ -501,6 +533,26 @@ async fn transition_ticket_state(
 ) -> Result<Ticket, String> {
     state
         .execute_transition_ticket(&ticket_key, next_state)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn ticket_statuses(
+    state: tauri::State<'_, DesktopController>,
+    ticket_key: String,
+) -> Result<Vec<TicketStatus>, String> {
+    state.ticket_statuses(&ticket_key).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn move_ticket(
+    state: tauri::State<'_, DesktopController>,
+    ticket_key: String,
+    status_id: String,
+) -> Result<Ticket, String> {
+    state
+        .execute_move_ticket(&ticket_key, &status_id)
         .await
         .map_err(|e| e.to_string())
 }
@@ -866,6 +918,8 @@ pub fn run() {
             get_pr_diff,
             start_ticket_branch,
             transition_ticket_state,
+            ticket_statuses,
+            move_ticket,
             approve_pr,
             merge_pr_and_close_ticket,
             list_plane_projects,
@@ -978,6 +1032,7 @@ mod tests {
                 title: "Expose rate-limit headers on public endpoints".into(),
                 description: "".into(),
                 state: TicketState::Todo,
+                status: String::new(),
                 assignee: Some("@ansar".into()),
                 priority: Some("low".into()),
                 updated_at: "".into(),
@@ -992,6 +1047,7 @@ mod tests {
                 title: title.into(),
                 description: description.into(),
                 state: TicketState::Todo,
+                status: String::new(),
                 assignee: None,
                 priority: None,
                 updated_at: "".into(),
@@ -1067,6 +1123,7 @@ mod tests {
                     title: "Fix JWT refresh race on concurrent requests".into(),
                     description: "When two requests expire within the same millisecond, parallel refresh calls invalidate the first rotated token. Guard rotation with an async mutex inside the session store.".into(),
                     state: TicketState::InReview,
+                    status: String::new(),
                     assignee: Some("@ansar".into()),
                     priority: Some("high".into()),
                     updated_at: "2026-11-11T02:14:09Z".into(),
@@ -1079,6 +1136,7 @@ mod tests {
                     title: "Add exponential backoff to webhook delivery".into(),
                     description: "Failed webhook deliveries currently retry immediately and trip downstream rate limits. Schedule retries with jitter over 5 attempts.".into(),
                     state: TicketState::InProgress,
+                    status: String::new(),
                     assignee: Some("@alex".into()),
                     priority: Some("medium".into()),
                     updated_at: "2026-11-11T02:20:00Z".into(),
@@ -1091,6 +1149,7 @@ mod tests {
                     title: "Expose rate-limit headers on public endpoints".into(),
                     description: "Return X-RateLimit-Limit, X-RateLimit-Remaining, and X-RateLimit-Reset on all authenticated API routes.".into(),
                     state: TicketState::Todo,
+                    status: String::new(),
                     assignee: Some("@ansar".into()),
                     priority: Some("low".into()),
                     updated_at: "2026-11-11T02:30:00Z".into(),

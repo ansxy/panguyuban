@@ -3,7 +3,7 @@ import { useState } from "react";
 export type FeatureKey = "tickets" | "prs" | "agents" | "meetings" | "prototypes" | "design" | "requests" | "memory";
 
 export const FEATURES: { key: FeatureKey; label: string; what: string; cost?: string }[] = [
-  { key: "tickets", label: "Tickets", what: "Plane tickets in the sidebar and on Overview." },
+  { key: "tickets", label: "Tickets", what: "Tickets from your tracker in the sidebar and on Overview." },
   { key: "prs", label: "Pull requests", what: "GitHub pull requests, reviews and merges." },
   {
     key: "agents",

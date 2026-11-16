@@ -8,6 +8,7 @@ import {
   importCalendar,
   listPlaneProjects,
   mergePrAndCloseTicket,
+  moveTicket,
   PlaneProject,
   PullRequest,
   saveWorkspaceConfig,
@@ -16,9 +17,11 @@ import {
   syncOne,
   syncProviders,
   Ticket,
+  ticketStatuses,
+  type TicketStatus,
   WorkspaceConfig,
 } from "./api";
-import { DiffFiles, FilterTabs, Icon, type IconName } from "./ui";
+import { DiffFiles, FilterTabs, Icon, type IconName, Logo } from "./ui";
 import { AgentsView, shortPath, SidebarAgents, useAgents } from "./Agents";
 import { BuilderView, useBuilder } from "./Builder";
 import { ProvidersSection } from "./ProvidersSettings";
@@ -365,11 +368,11 @@ export function App(): React.JSX.Element {
       applyDashboard(next);
       setActionStatus(
         kind === "plane"
-          ? `Plane refreshed: ${next.tickets.length} tickets`
+          ? `Tickets refreshed: ${next.tickets.length}`
           : `GitHub refreshed: ${next.pull_requests.length} PRs`
       );
     } catch (err) {
-      setActionStatus(`${kind === "plane" ? "Plane" : "GitHub"}: ${String(err)}`);
+      setActionStatus(`${kind === "plane" ? "Tickets" : "GitHub"}: ${String(err)}`);
     } finally {
       setRefreshing(null);
     }
@@ -424,6 +427,14 @@ export function App(): React.JSX.Element {
       const branch = await startTicketBranch(ticketKey);
       applyDashboard(await getDashboardState());
       return `Checked out ${branch}`;
+    });
+  }
+
+  function handleMoveTicket(ticketKey: string, status: TicketStatus): Promise<void> {
+    return runAction(async () => {
+      await moveTicket(ticketKey, status.id);
+      applyDashboard(await getDashboardState());
+      return `Moved ${ticketKey} to ${status.name}`;
     });
   }
 
@@ -526,7 +537,10 @@ export function App(): React.JSX.Element {
       <div className="workspace-grid">
         <aside id="sidebar" className="sidebar" aria-label="Workspace navigation">
           <div className="sidebar-head">
-            <span className="wordmark">Panguyuban</span>
+            <span className="wordmark">
+              <Logo />
+              Panguyuban
+            </span>
             <button
               type="button"
               className="collapse-btn"
@@ -567,7 +581,7 @@ export function App(): React.JSX.Element {
 <NavItem
               icon="ticket"
               label="Tickets"
-              hint="Plane"
+              hint="Your work queue"
               count={tickets.length}
               current={section === "tickets"}
               collapsed={layout.sidebarCollapsed}
@@ -796,7 +810,7 @@ export function App(): React.JSX.Element {
                 <div className="state-box">
                   <h1>Could not sync tickets and pull requests</h1>
                   <p className="lead">
-                    {syncError || "The sync failed."} Check your Plane and GitHub tokens in
+                    {syncError || "The sync failed."} Check your ticket tracker and GitHub tokens in
                     Settings, or retry.
                   </p>
                   <div className="action-group">
@@ -822,7 +836,7 @@ export function App(): React.JSX.Element {
 
           {dataState === "full" && section === "tickets" && activeTicket && (
             <main className="main-stage" data-focus={layout.detailFocused || undefined}>
-              <section id="ticket-list" className="pane pane--list" aria-label="Plane ticket queue">
+              <section id="ticket-list" className="pane pane--list" aria-label="Ticket queue">
                 <Splitter
                   label="Resize list"
                   controls="ticket-list"
@@ -850,7 +864,7 @@ export function App(): React.JSX.Element {
 
                 <div className="filter-bar">
                   <label htmlFor="ticket-search" className="visually-hidden">
-                    Filter Plane tickets
+                    Filter tickets
                   </label>
                   <input
                     id="ticket-search"
@@ -907,14 +921,19 @@ export function App(): React.JSX.Element {
 
               <section
                 className="pane pane--detail ticket-detail"
-                aria-label="Selected Plane ticket inspector"
+                aria-label="Selected ticket"
               >
                 <div className="ticket-head">
                   <span className="measured-ink">{activeTicket.key}</span>
                   <div className="pane-tools">
+                    <TicketStatusPicker
+                      ticket={activeTicket}
+                      disabled={busy}
+                      onMove={(status) => handleMoveTicket(activeTicket.key, status)}
+                    />
                     {activeTicket.url && (
                       <a href={activeTicket.url} target="_blank" rel="noreferrer" className="btn">
-                        Open in Plane
+                        Open in browser
                       </a>
                     )}
                     <FocusButton layout={layout} setLayout={setLayout} />
@@ -1406,8 +1425,8 @@ export function App(): React.JSX.Element {
 
                   <section className="settings-section">
                     <div className="settings-aside">
-                      <h2>Plane</h2>
-                      <p>Where your tickets come from.</p>
+                      <h2>Ticket tracker</h2>
+                      <p>Where your tickets come from. Plane is the tracker supported today.</p>
                     </div>
                     <div className="settings-body">
                       {features.tickets ? (
@@ -1653,7 +1672,7 @@ export function App(): React.JSX.Element {
               </span>
             )}
             <span className="tabbar-spacer" />
-            {features.tickets && <span>Plane: {dashboard?.config.plane_project_id || "all projects"}</span>}
+            {features.tickets && <span>Tickets: {dashboard?.config.plane_project_id || "all projects"}</span>}
             {features.prs && <span>GitHub: {space?.github_repo || dashboard?.config.github_repo || "all repos"}</span>}
           </footer>
         </div>
@@ -1664,6 +1683,59 @@ export function App(): React.JSX.Element {
 
 // Asset id -> download URL, shared across tickets for this session.
 const assetUrls = new Map<string, Promise<string>>();
+
+/** Moves a ticket between the statuses its tracker allows, loaded when the ticket is opened. */
+function TicketStatusPicker({
+  ticket,
+  disabled,
+  onMove,
+}: {
+  ticket: Ticket;
+  disabled: boolean;
+  onMove: (status: TicketStatus) => void;
+}) {
+  const [statuses, setStatuses] = useState<TicketStatus[] | null>(null);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    let live = true;
+    setStatuses(null);
+    setError("");
+    ticketStatuses(ticket.key)
+      .then((s) => live && setStatuses(s))
+      .catch((err) => live && setError(String(err)));
+    return () => {
+      live = false;
+    };
+  }, [ticket.key]);
+
+  // Match by the tracker's name; without one, the first status in the same bucket.
+  const current =
+    statuses?.find((s) => s.name === ticket.status) ??
+    (ticket.status ? undefined : statuses?.find((s) => s.state === ticket.state));
+  const label =
+    ticket.status || TICKET_GROUPS.find((g) => g.state === ticket.state)?.label || ticket.state;
+
+  return (
+    <select
+      className="status-select"
+      aria-label={`Status of ${ticket.key}`}
+      title={error ? `Could not load statuses: ${error}` : "Move to another status"}
+      value={current?.id ?? ""}
+      disabled={disabled || !statuses}
+      onChange={(e) => {
+        const next = statuses?.find((s) => s.id === e.target.value);
+        if (next && next.id !== current?.id) onMove(next);
+      }}
+    >
+      {!current && <option value="">{statuses || error ? label : `${label}…`}</option>}
+      {statuses?.map((s) => (
+        <option key={s.id} value={s.id}>
+          {s.name}
+        </option>
+      ))}
+    </select>
+  );
+}
 
 function PlaneImage({ src, ticketUrl }: { src: string; ticketUrl: string }) {
   const [url, setUrl] = useState<string | null>(null);
@@ -1687,7 +1759,7 @@ function PlaneImage({ src, ticketUrl }: { src: string; ticketUrl: string }) {
   if (error) {
     return (
       <a className="ticket-image-fallback" href={ticketUrl} target="_blank" rel="noreferrer">
-        Image could not load ({error}) — open in Plane
+        Image could not load ({error}) — open the ticket
       </a>
     );
   }
@@ -1696,7 +1768,7 @@ function PlaneImage({ src, ticketUrl }: { src: string; ticketUrl: string }) {
     <img
       className="ticket-image"
       src={url}
-      alt="Image from Plane ticket description"
+      alt="Image from the ticket description"
       onError={() => setError(`image URL did not load: ${url.split("?")[0]}`)}
     />
   );

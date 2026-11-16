@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use panguyuban_core::error::CoreError;
-use panguyuban_core::models::{Ticket, TicketState};
+use panguyuban_core::models::{Ticket, TicketState, TicketStatus};
 use panguyuban_core::traits::IssueProvider;
 use std::collections::HashMap;
 
@@ -124,9 +124,15 @@ struct TransitionPlaneIssueRequest<'a> {
 }
 
 #[derive(Debug, Deserialize)]
+#[derive(Clone)]
 struct PlaneStateItem {
     id: String,
     group: String,
+    #[serde(default)]
+    name: String,
+    /// Plane's own order within a group.
+    #[serde(default)]
+    sequence: f64,
 }
 
 pub fn resolve_plane_state_id(raw_json: &str, target: &TicketState) -> Result<String, CoreError> {
@@ -162,6 +168,18 @@ fn map_plane_group_to_state(group: Option<&str>) -> TicketState {
         Some("completed") => TicketState::Done,
         Some("cancelled") => TicketState::Cancelled,
         _ => TicketState::Todo,
+    }
+}
+
+/// Where a Plane state group sits in the workflow, for listing statuses in order.
+fn plane_group_rank(group: &str) -> u8 {
+    match group {
+        "backlog" => 0,
+        "unstarted" => 1,
+        "started" => 2,
+        "completed" => 3,
+        "cancelled" => 4,
+        _ => 5,
     }
 }
 
@@ -249,7 +267,7 @@ fn convert_payload(
     base_url: &str,
     workspace_slug: &str,
     project: &PlaneProjectItem,
-    state_groups: &HashMap<String, String>,
+    states: &HashMap<String, PlaneStateItem>,
     me: Option<&str>,
 ) -> Ticket {
     let prefix = issue
@@ -264,17 +282,29 @@ fn convert_payload(
     let seq = issue.sequence_id.unwrap_or(1);
     let key = format!("{}-{}", prefix.to_ascii_uppercase(), seq);
 
+    // Without `expand`, `state` is a bare id; resolve it via the project's states.
+    let listed = match &issue.state {
+        Some(PlaneStateField::Id(id)) => states.get(id),
+        _ => None,
+    };
+    let expanded = match &issue.state {
+        Some(PlaneStateField::Expanded(s)) => Some(s),
+        _ => None,
+    };
     let state_group = issue
         .state_detail
         .as_ref()
         .and_then(|s| s.group.as_deref().or(s.name.as_deref()))
-        .or_else(|| match &issue.state {
-            Some(PlaneStateField::Expanded(s)) => s.group.as_deref().or(s.name.as_deref()),
-            // Without `expand`, `state` is a bare id; resolve it via the project's states.
-            Some(PlaneStateField::Id(id)) => state_groups.get(id).map(String::as_str),
-            None => None,
-        });
+        .or_else(|| expanded.and_then(|s| s.group.as_deref().or(s.name.as_deref())))
+        .or_else(|| listed.map(|s| s.group.as_str()));
     let state = map_plane_group_to_state(state_group);
+    let status = issue
+        .state_detail
+        .as_ref()
+        .and_then(|s| s.name.clone())
+        .or_else(|| expanded.and_then(|s| s.name.clone()))
+        .or_else(|| listed.map(|s| s.name.clone()))
+        .unwrap_or_default();
 
     let extract_name = |a: PlaneAssigneeDetail| -> Option<String> {
         a.display_name
@@ -333,6 +363,7 @@ fn convert_payload(
             .or_else(|| issue.description_html.as_deref().map(html_to_text))
             .unwrap_or_default(),
         state,
+        status,
         assignee,
         priority: issue.priority,
         updated_at: issue.updated_at.unwrap_or_default(),
@@ -433,17 +464,41 @@ impl PlaneProvider {
         Ok(select_target_projects(projects, &self.config.project_id))
     }
 
-    /// State id -> group for one project. Missing states just leave tickets as Todo.
-    async fn state_groups(&self, project_id: &str) -> HashMap<String, String> {
-        let url = self.workspace_endpoint(&format!("projects/{project_id}/states/"));
-        let Ok(body) = self.get_text(&url).await else {
-            return HashMap::new();
-        };
-        parse_results::<PlaneStateItem>(&body)
+    /// One project's states, in workflow order: by group, then Plane's own order.
+    async fn project_states(&self, project_id: &str) -> Result<Vec<PlaneStateItem>, CoreError> {
+        let body = self
+            .get_text(&self.workspace_endpoint(&format!("projects/{project_id}/states/")))
+            .await?;
+        let mut states = parse_results::<PlaneStateItem>(&body)?;
+        states.sort_by(|a, b| {
+            plane_group_rank(&a.group)
+                .cmp(&plane_group_rank(&b.group))
+                .then(a.sequence.total_cmp(&b.sequence))
+        });
+        Ok(states)
+    }
+
+    /// State id -> state for one project. Missing states just leave tickets as Todo.
+    async fn state_groups(&self, project_id: &str) -> HashMap<String, PlaneStateItem> {
+        self.project_states(project_id)
+            .await
             .unwrap_or_default()
             .into_iter()
-            .map(|s| (s.id, s.group))
+            .map(|s| (s.id.clone(), s))
             .collect()
+    }
+
+    /// The project a key like `WEB-12` belongs to, from its identifier. Falls back to
+    /// finding the ticket, which reads every project's tickets.
+    async fn project_for_key(&self, key: &str) -> Result<String, CoreError> {
+        let prefix = key.rsplit_once('-').map_or(key, |(p, _)| p);
+        let by_identifier = self.target_projects().await?.into_iter().find(|p| {
+            p.identifier.as_deref().is_some_and(|i| i.eq_ignore_ascii_case(prefix))
+        });
+        match by_identifier {
+            Some(project) => Ok(project.id),
+            None => Ok(self.find_ticket(key).await?.0),
+        }
     }
 
     /// Every ticket of the target projects, paired with its project id
@@ -595,6 +650,45 @@ impl IssueProvider for PlaneProvider {
         .await?;
 
         ticket.state = next;
+        // The state picked is the group's first; its name arrives with the next sync.
+        ticket.status.clear();
+        Ok(ticket)
+    }
+
+    async fn ticket_statuses(&self, key: &str) -> Result<Vec<TicketStatus>, CoreError> {
+        let project_id = self.project_for_key(key).await?;
+        Ok(self
+            .project_states(&project_id)
+            .await?
+            .into_iter()
+            .map(|s| TicketStatus {
+                state: map_plane_group_to_state(Some(&s.group)),
+                id: s.id,
+                name: s.name,
+            })
+            .collect())
+    }
+
+    async fn move_ticket(&self, key: &str, status_id: &str) -> Result<Ticket, CoreError> {
+        let (project_id, mut ticket) = self.find_ticket(key).await?;
+        let status = self
+            .project_states(&project_id)
+            .await?
+            .into_iter()
+            .find(|s| s.id == status_id)
+            .ok_or_else(|| CoreError::NotFound(format!("That status is not in {key}'s project")))?;
+        let req_body = serde_json::to_value(TransitionPlaneIssueRequest { state: status_id })
+            .map_err(|e| CoreError::StorageError(e.to_string()))?;
+        self.send_items(
+            reqwest::Method::PATCH,
+            &project_id,
+            &format!("{}/", ticket.id),
+            Some(req_body),
+        )
+        .await?;
+
+        ticket.state = map_plane_group_to_state(Some(&status.group));
+        ticket.status = status.name;
         Ok(ticket)
     }
 }
@@ -700,11 +794,18 @@ mod tests {
         }"#;
         let payload: PlaneIssuePayload = serde_json::from_str(raw).unwrap();
         let project = PlaneProjectItem { id: "p1".into(), identifier: Some("web".into()), name: None };
-        let states = HashMap::from([("s-started".to_string(), "started".to_string())]);
+        let review = PlaneStateItem {
+            id: "s-started".into(),
+            group: "started".into(),
+            name: "In Review".into(),
+            sequence: 2.0,
+        };
+        let states = HashMap::from([("s-started".to_string(), review)]);
 
         let ticket = convert_payload(payload, "https://plane.x", "team", &project, &states, Some("u-me"));
         assert_eq!(ticket.key, "WEB-9");
         assert_eq!(ticket.state, TicketState::InProgress);
+        assert_eq!(ticket.status, "In Review");
         assert!(ticket.assigned_to_me);
         assert_eq!(ticket.url, "https://plane.x/team/projects/p1/issues/wi-9");
     }

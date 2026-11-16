@@ -12,6 +12,8 @@ export interface Ticket {
   title: string;
   description: string;
   state: TicketState;
+  /** The tracker's own name for the status ("In Review"); empty when it did not say. */
+  status: string;
   assignee: string | null;
   priority: string | null;
   updated_at: string;
@@ -150,6 +152,36 @@ export async function transitionTicketState(
   }
   ticket.state = nextState;
   return structuredClone(ticket);
+}
+
+/** A status a ticket can move to, named the way its tracker names it. */
+export interface TicketStatus {
+  id: string;
+  name: string;
+  state: TicketState;
+}
+
+/** The statuses this ticket can move to: a project's states in Plane, allowed transitions in Jira. */
+export async function ticketStatuses(ticketKey: string): Promise<TicketStatus[]> {
+  if (window.__TAURI_INTERNALS__?.invoke) {
+    return window.__TAURI_INTERNALS__.invoke<TicketStatus[]>("ticket_statuses", { ticketKey });
+  }
+  const names: [TicketState, string][] = [
+    ["Backlog", "Backlog"],
+    ["Todo", "Todo"],
+    ["InProgress", "In progress"],
+    ["InReview", "In review"],
+    ["Done", "Done"],
+    ["Cancelled", "Cancelled"],
+  ];
+  return names.map(([state, name]) => ({ id: state, name, state }));
+}
+
+export async function moveTicket(ticketKey: string, statusId: string): Promise<Ticket> {
+  if (window.__TAURI_INTERNALS__?.invoke) {
+    return window.__TAURI_INTERNALS__.invoke<Ticket>("move_ticket", { ticketKey, statusId });
+  }
+  return transitionTicketState(ticketKey, statusId as TicketState);
 }
 
 export async function approvePr(

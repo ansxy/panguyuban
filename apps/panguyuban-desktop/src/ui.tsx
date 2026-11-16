@@ -19,6 +19,19 @@ const ICONS = {
 
 export type IconName = keyof typeof ICONS;
 
+/** The Bale mark (app-icon.svg) in the theme's accent colour. Decorative: the wordmark beside it names the app. */
+export function Logo({ size = 18 }: { size?: number }) {
+  return (
+    <svg className="logo" width={size} height={size} viewBox="0 0 64 64" aria-hidden="true">
+      <g fill="none" stroke="currentColor" strokeWidth="5" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M5 31 Q12 31 16 26.5 L32 11 L48 26.5 Q52 31 59 31" />
+        <path d="M18 33 V53 M46 33 V53 M11 54 H53" />
+      </g>
+      <circle cx="32" cy="43" r="4.5" fill="currentColor" />
+    </svg>
+  );
+}
+
 /** 16px line icon in the current text colour. Decorative: label the button, not the icon. */
 export function Icon({ name, size = 16 }: { name: IconName; size?: number }) {
   return (

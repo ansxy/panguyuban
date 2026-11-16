@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 
 use crate::error::CoreError;
-use crate::models::{MergeMethod, PullRequest, Ticket, TicketState};
+use crate::models::{MergeMethod, PullRequest, Ticket, TicketState, TicketStatus};
 
 #[async_trait]
 pub trait IssueProvider: Send + Sync {
@@ -10,6 +10,19 @@ pub trait IssueProvider: Send + Sync {
     async fn get_ticket(&self, key: &str) -> Result<Ticket, CoreError>;
     async fn create_ticket(&self, title: &str, description: &str) -> Result<Ticket, CoreError>;
     async fn transition_ticket(&self, key: &str, next: TicketState) -> Result<Ticket, CoreError>;
+
+    /// The statuses this ticket can move to, as its tracker defines them: a project's
+    /// states in Plane, an issue's allowed transitions in Jira.
+    async fn ticket_statuses(&self, key: &str) -> Result<Vec<TicketStatus>, CoreError> {
+        let _ = key;
+        Err(CoreError::NotFound(format!("{} cannot list statuses", self.provider_name())))
+    }
+
+    /// Moves the ticket to one of the statuses from `ticket_statuses`.
+    async fn move_ticket(&self, key: &str, status_id: &str) -> Result<Ticket, CoreError> {
+        let _ = (key, status_id);
+        Err(CoreError::NotFound(format!("{} cannot move tickets", self.provider_name())))
+    }
 }
 
 #[async_trait]

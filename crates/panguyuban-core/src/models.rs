@@ -17,6 +17,9 @@ pub struct Ticket {
     pub title: String,
     pub description: String,
     pub state: TicketState,
+    /// The tracker's own name for the status ("In Review"); empty when it did not say.
+    #[serde(default)]
+    pub status: String,
     pub assignee: Option<String>,
     pub priority: Option<String>,
     pub updated_at: String,
@@ -24,6 +27,15 @@ pub struct Ticket {
     /// True when the Plane `users/me` id is among the assignees.
     #[serde(default)]
     pub assigned_to_me: bool,
+}
+
+/// A status a ticket can be moved to, named the way its tracker names it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TicketStatus {
+    pub id: String,
+    pub name: String,
+    /// The bucket it counts under in filters and the progress track.
+    pub state: TicketState,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

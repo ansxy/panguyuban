@@ -1557,7 +1557,15 @@ html[data-resizing] .workspace-grid {
 /* ---- Spaces, tab bar, terminal panes, status bar ---- */
 
 .sidebar-head .wordmark {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
   font-size: var(--text-sm);
+}
+
+.logo {
+  flex: none;
+  color: var(--color-accent);
 }
 
 /* Views sit between Spaces and Agents at their natural height; those two share the rest. */
@@ -3442,4 +3450,21 @@ html[data-resizing="row"] {
 }
 .design-status {
   padding: 0 16px 8px;
+}
+
+/* Sized like .btn so it sits beside "Open in browser". */
+.status-select {
+  max-width: 14rem;
+  min-height: 36px;
+  padding: 0 var(--space-md);
+  border: var(--rule-hair) solid var(--color-rule-2);
+  border-radius: var(--radius-pill);
+  background: var(--color-paper-2);
+  color: var(--color-ink);
+  font-size: var(--text-sm);
+  font-weight: 500;
+}
+
+.status-select:disabled {
+  color: var(--color-muted);
 }
