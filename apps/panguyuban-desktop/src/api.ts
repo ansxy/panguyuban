@@ -439,6 +439,37 @@ export async function builderPlan(args: {
   throw new Error("A real agent needs the desktop app");
 }
 
+export type ReviewRole = "engineer" | "ux" | "qa" | "contrarian" | "leader";
+
+export interface Finding {
+  severity: "blocker" | "suggestion";
+  step: string | null;
+  text: string;
+}
+
+export interface RoleReview {
+  role: ReviewRole;
+  findings: Finding[];
+  verdict: string;
+  fixes: string;
+}
+
+/** Runs one reviewer's turn over the PRD. Nothing is saved. */
+export async function builderReviewStep(args: {
+  projectId: string;
+  projectName: string;
+  harness: string;
+  model: string | null;
+  role: ReviewRole;
+  prd: string;
+  earlier: RoleReview[];
+}): Promise<RoleReview> {
+  if (window.__TAURI_INTERNALS__?.invoke) {
+    return window.__TAURI_INTERNALS__.invoke<RoleReview>("builder_review_step", { args });
+  }
+  throw new Error("A real agent needs the desktop app");
+}
+
 export interface DesignResult {
   message: string;
   html: string;

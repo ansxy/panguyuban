@@ -5,7 +5,7 @@ use std::process::Command;
 use std::sync::{Mutex, OnceLock};
 
 use agent_runtime::{
-    design_turn, interview_turn, plan_turn, runtime_for, DesignRequest, InterviewRequest, Plan, Turn,
+    design_turn, interview_turn, plan_turn, runtime_for, DesignRequest, InterviewRequest, Plan, ReviewRole, RoleReview, Turn, review_turn,
 };
 use panguyuban_core::storage::SqliteStore;
 use serde::{Deserialize, Serialize};
@@ -151,6 +151,28 @@ pub fn run_plan(store: &SqliteStore, args: PlanArgs) -> Result<Plan, String> {
         let _ = std::fs::write(dir.join("plan.json"), format!("{json}\n"));
     }
     Ok(plan)
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewStepArgs {
+    pub project_id: String,
+    pub project_name: String,
+    pub harness: String,
+    pub model: Option<String>,
+    pub role: ReviewRole,
+    pub prd: String,
+    /// Reviews already given this round, in order.
+    pub earlier: Vec<RoleReview>,
+}
+
+/// Runs one reviewer's turn over the PRD. Saves nothing; the caller keeps the round.
+pub fn run_review_step(store: &SqliteStore, args: ReviewStepArgs) -> Result<RoleReview, String> {
+    let runtime = crate::provider::runtime_for(store, &args.harness)?;
+    let dir = project_dir(&args.project_name, &args.project_id);
+    std::fs::create_dir_all(&dir).map_err(|e| format!("Could not create {}: {e}", dir.display()))?;
+    review_turn(runtime.as_ref(), args.role, &args.prd, &args.earlier, args.model.as_deref(), &dir)
+        .map_err(|e| e.to_string())
 }
 
 #[derive(Debug, Deserialize)]

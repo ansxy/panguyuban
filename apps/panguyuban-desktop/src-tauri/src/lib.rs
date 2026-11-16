@@ -709,6 +709,18 @@ async fn builder_plan(
         .map_err(|e| e.to_string())?
 }
 
+/// Runs one reviewer's turn over the PRD.
+#[tauri::command]
+async fn builder_review_step(
+    state: tauri::State<'_, DesktopController>,
+    args: builder::ReviewStepArgs,
+) -> Result<agent_runtime::RoleReview, String> {
+    let store = state.store.clone();
+    tokio::task::spawn_blocking(move || builder::run_review_step(&store, args))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 /// Proposes or revises the HTML mock-up for an approved PRD.
 #[tauri::command]
 async fn builder_design(
@@ -936,6 +948,7 @@ pub fn run() {
             builder_models,
             builder_interview_turn,
             builder_plan,
+            builder_review_step,
             builder_design,
             builder_save_prd,
             term_open,
