@@ -297,9 +297,11 @@ export async function runTeamReview(builder: Builder, projectId: string, review:
   const save = (next: TeamReview, note?: string): boolean => {
     local = next;
     const cur = builder.projectById(projectId);
-    if (!cur?.teamReview || cur.teamReview.startedAt !== local.startedAt) return false;
-    if (cur.prdApproved || isStale(cur.teamReview, prdMarkdown(cur))) {
-      const stopped = interrupt(cur.teamReview, Date.now());
+    if (!cur) return false;
+    // ">" not "!==": the ref lags render, so a missing or older review is not-yet-rendered, not replaced.
+    if (cur.teamReview && cur.teamReview.startedAt > local.startedAt) return false;
+    if (cur.prdApproved || isStale(local, prdMarkdown(cur))) {
+      const stopped = interrupt(local, Date.now());
       builder.updateById(projectId, (p) =>
         p.teamReview?.startedAt === stopped.startedAt ? { ...p, teamReview: stopped } : p,
       );
