@@ -137,6 +137,8 @@ export function AgentsView(props: {
   const teamSort = (t: TeamEntry) => (isReviewInFlight(t.projectId) ? 0 : 1);
   visibleTeams.sort((a, b) => teamSort(a) - teamSort(b) || b.review.startedAt - a.review.startedAt);
   const activeTeam = visibleTeams.find((t) => "team:" + t.projectId === selectedId);
+  // With no session visible and nothing selected, the first visible team fills the detail pane.
+  const shownTeam = activeTeam ?? (!active ? visibleTeams[0] : undefined);
   const total = sessions.length + props.teams.length;
   const count = (st: AgentStatus) =>
     sessions.filter((s) => s.status === st).length + props.teams.filter((t) => teamStatus(t) === st).length;
@@ -175,7 +177,7 @@ export function AgentsView(props: {
             </div>
             <ul className="ticket-rows">
               {visibleTeams.map((t) => {
-                const selected = !!activeTeam && t.projectId === activeTeam.projectId;
+                const selected = !!shownTeam && t.projectId === shownTeam.projectId;
                 const inFlight = isReviewInFlight(t.projectId);
                 return (
                   <li key={t.projectId}>
@@ -223,7 +225,7 @@ export function AgentsView(props: {
               </div>
               <ul className="ticket-rows">
                 {group.items.map((s) => {
-                  const selected = !activeTeam && s.session_id === active?.session_id;
+                  const selected = !shownTeam && s.session_id === active?.session_id;
                   const running = s.subagents.filter((a) => !a.finished).length;
                   return (
                     <li key={s.session_id}>
@@ -263,19 +265,19 @@ export function AgentsView(props: {
       </section>
 
       <section className="pane pane--detail ticket-detail" aria-label="Selected agent session">
-        {activeTeam ? (
+        {shownTeam ? (
           <>
             <div className="pane-header">
-              <h2>{activeTeam.name}</h2>
+              <h2>{shownTeam.name}</h2>
               <div className="pane-tools">{props.focusButton}</div>
             </div>
             <p className="agents-meta">
-              PRD review · {activeTeam.agentLabel} · started {duration(now - activeTeam.review.startedAt)} ago
+              PRD review · {shownTeam.agentLabel} · started {duration(now - shownTeam.review.startedAt)} ago
             </p>
-            <button type="button" className="btn" onClick={() => props.onOpenTeam(activeTeam.projectId)}>
+            <button type="button" className="btn" onClick={() => props.onOpenTeam(shownTeam.projectId)}>
               Open in Prototypes →
             </button>
-            <TeamFlow review={activeTeam.review} now={now} running={isReviewInFlight(activeTeam.projectId)} />
+            <TeamFlow review={shownTeam.review} now={now} running={isReviewInFlight(shownTeam.projectId)} />
           </>
         ) : active ? (
           <AgentDetail key={active.session_id} session={active} now={now} focusButton={props.focusButton} onEnded={props.agents.refresh} onHandOff={props.onHandOff} />

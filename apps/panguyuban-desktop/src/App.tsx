@@ -1278,11 +1278,11 @@ export function App(): React.JSX.Element {
             <main className="main-stage" data-focus={layout.detailFocused || undefined}>
               <AgentsView
                 agents={agents}
-                teams={builder.projects.flatMap((p) =>
+                teams={features.prototypes ? builder.projects.flatMap((p) =>
                   p.teamReview
                     ? [{ projectId: p.id, name: p.name, agentLabel: agentById(p.interviewAgent)?.label ?? "Agent", review: p.teamReview }]
                     : []
-                )}
+                ) : []}
                 onOpenTeam={(id) => {
                   builder.select(id);
                   setSection("builder");
