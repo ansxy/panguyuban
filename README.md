@@ -32,6 +32,7 @@ Windows too, but those are not tested yet, and a few parts are macOS-only today:
 | Tokens kept between launches | Keychain | not yet (no Linux keyring enabled) | Credential Manager |
 | Terminals | yes | yes | not yet (expects a Unix shell) |
 | Installable app bundle | `Panguyuban.app` | run from source | run from source (needs an `.ico` icon first) |
+| `pangu` terminal command | yes | should build | no |
 
 ## Requirements
 

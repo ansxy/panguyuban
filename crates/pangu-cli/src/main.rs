@@ -1,15 +1,34 @@
+//! The `pangu` command. macOS and Linux only: it relies on Unix process groups, signals and exec.
+
+#[cfg(unix)]
 mod claude;
+#[cfg(unix)]
 mod hook;
+#[cfg(unix)]
 mod repl;
+#[cfg(unix)]
 mod session;
 
-use std::io::Read;
-use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::process::exit;
+#[cfg(unix)]
+use std::{
+    io::Read,
+    panic::{catch_unwind, AssertUnwindSafe},
+    process::exit,
+};
 
-use hook::{Agent, HookOutcome};
-use session::Session;
+#[cfg(unix)]
+use crate::{
+    hook::{Agent, HookOutcome},
+    session::Session,
+};
 
+#[cfg(not(unix))]
+fn main() {
+    eprintln!("pangu needs macOS or Linux");
+    std::process::exit(1);
+}
+
+#[cfg(unix)]
 fn agent_arg(args: &[String]) -> Option<Agent> {
     match args.iter().position(|a| a == "--agent").and_then(|i| args.get(i + 1)).map(String::as_str) {
         Some("claude") => Some(Agent::Claude),
@@ -17,12 +36,14 @@ fn agent_arg(args: &[String]) -> Option<Agent> {
     }
 }
 
+#[cfg(unix)]
 fn stdin_text() -> String {
     let mut s = String::new();
     let _ = std::io::stdin().read_to_string(&mut s);
     s
 }
 
+#[cfg(unix)]
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {

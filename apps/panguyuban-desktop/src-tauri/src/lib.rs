@@ -1,7 +1,19 @@
 mod agents;
 mod builder;
 mod calendar;
+#[cfg(unix)]
 mod cli_link;
+#[cfg(not(unix))]
+mod cli_link {
+    #[tauri::command]
+    pub fn install_pangu() -> Result<String, String> {
+        Err("not supported on this system".into())
+    }
+    #[tauri::command]
+    pub fn pangu_status() -> Option<String> {
+        None
+    }
+}
 mod http;
 mod memory;
 mod provider;

@@ -9,6 +9,7 @@
 
 mod antigravity;
 mod build;
+#[cfg(unix)] // process groups and kill(2)
 mod commands;
 mod claude;
 mod harness;
@@ -28,6 +29,7 @@ use serde::{Deserialize, Serialize};
 pub use antigravity::AntigravityRuntime;
 pub use build::*;
 pub use claude::ClaudeRuntime;
+#[cfg(unix)]
 pub use commands::*;
 pub use harness::*;
 pub use hooks::*;

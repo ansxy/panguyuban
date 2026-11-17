@@ -6,8 +6,11 @@ fn main() {
     if !path.exists() {
         std::fs::create_dir_all("binaries").unwrap();
         std::fs::write(&path, "#!/bin/sh\necho 'pangu was not built; run scripts/build-pangu.sh' >&2\nexit 1\n").unwrap();
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
     }
     println!("cargo:rerun-if-changed=binaries");
     tauri_build::build()
