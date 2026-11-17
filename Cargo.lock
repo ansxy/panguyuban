@@ -2466,6 +2466,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "pangu-cli"
+version = "0.1.0"
+dependencies = [
+ "agent-runtime",
+ "dirs 5.0.1",
+ "panguyuban-core",
+ "provider-openai",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "panguyuban-core"
 version = "0.1.0"
 dependencies = [
