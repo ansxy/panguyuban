@@ -60,7 +60,7 @@ impl Workspace {
             .collect();
         let normal = normal.join("/");
         if !self.write_paths.iter().any(|w| w == "*" || *w == normal) {
-            return Err(format!("writing {rel} is not allowed"));
+            return Err(format!("writing {rel} is not allowed; you can write: {}", self.write_paths.join(", ")));
         }
         if let Some(parent) = full.parent() {
             std::fs::create_dir_all(parent).map_err(|e| format!("cannot create folder for {rel}: {e}"))?;
@@ -75,6 +75,7 @@ impl Workspace {
 }
 
 /// What a tool returns: a one-line `summary` for the UI and the full `output` for the model.
+#[derive(Debug)]
 pub struct ToolResult {
     pub ok: bool,
     pub summary: String,

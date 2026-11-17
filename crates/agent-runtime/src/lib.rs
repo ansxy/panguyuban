@@ -9,6 +9,8 @@
 
 mod antigravity;
 mod claude;
+mod harness;
+mod hooks;
 mod process;
 mod registry;
 mod review;
@@ -22,6 +24,8 @@ use serde::{Deserialize, Serialize};
 
 pub use antigravity::AntigravityRuntime;
 pub use claude::ClaudeRuntime;
+pub use harness::*;
+pub use hooks::*;
 pub use registry::*;
 pub use review::*;
 pub use task::*;
