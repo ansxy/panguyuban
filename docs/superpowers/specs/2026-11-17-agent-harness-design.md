@@ -44,6 +44,13 @@ story in the same locked preview frame the prototype already uses.
 - **A record of every run** in the project folder, so the handover carries what the
   agent did.
 - A minimal `build-story` product skill so the Build stage has instructions to run.
+- **Modular parts.** The loop knows nothing specific: the model, each tool and each
+  hook (a check before or after a tool call) plug in through small interfaces, and
+  which ones a session uses is listed by name in `skills/registry.toml`.
+- **Customizable in Settings, narrow only.** An **Agent harness** section in Settings
+  turns tools and hooks off or on and lowers the step and time limits, per session
+  type. The registry is the ceiling: Settings can never add a tool, widen write paths
+  or raise a limit past it. The folder boundary and write paths are shown locked.
 
 ## Non-goals (this version)
 
@@ -201,12 +208,79 @@ All paths are relative to `work_dir`, resolved, and rejected if they leave it
 Tool output sent back to the model is capped (size left to the builder) with a note
 that it was cut; the full output goes to the run record.
 
+### Plug-in parts
+
+```rust
+pub trait Tool: Send + Sync {
+    fn name(&self) -> &'static str;
+    fn definition(&self) -> Value;                        // what the model sees
+    fn run(&self, ws: &Workspace, args: &Value) -> ToolResult;
+}
+
+pub trait Hook: Send + Sync {
+    fn name(&self) -> &'static str;
+    fn before(&self, call: &ToolCall, args: &Value) -> Result<(), String> { Ok(()) } // Err = refuse
+    fn after(&self, call: &ToolCall, ws: &Workspace, result: &mut ToolResult) {}     // may add a note
+}
+
+pub struct Harness {
+    pub chat: Box<dyn ChatModel>,
+    pub tools: Vec<Box<dyn Tool>>,
+    pub hooks: Vec<Box<dyn Hook>>,
+}
+```
+
+Tools and hooks are looked up by name from the built-in set. Adding one later (a
+command tool, an HTML check) is one new type plus its name in the registry; the loop
+does not change.
+
+- **Fixed, not a plug-in:** `Workspace` (folder boundary and `write_paths`). Every tool
+  touches files only through it, so no setting or missing hook can remove those
+  checks. The run record is also part of the loop, not a hook, because the handover
+  depends on it.
+- **Hooks in this version:** `no_external_urls`. After a successful write or edit, if
+  the file contains `http://` or `https://`, the tool result gets a note that the
+  preview blocks external URLs, so the model can inline or remove them.
+
 ### Registry
 
 `build-next-story` in `skills/registry.toml` changes to this version's scope:
 `write_paths = ["app/index.html"]`, `shell = false`, `status = "ready"` once the
-`build-story` skill exists. The registry is parsed with a TOML parser (session types,
-`write_paths`, `engineering_skills`), replacing the line scan.
+`build-story` skill exists, plus the ceiling for the harness:
+
+```toml
+tools           = ["read_file", "list_files", "search", "write_file", "edit_file"]
+hooks           = ["no_external_urls"]
+max_steps       = 40
+timeout_minutes = 15
+```
+
+The registry is parsed with a TOML parser, replacing the line scan.
+
+### Settings (narrow only)
+
+A new **Agent harness** section on the Settings page, built like the Providers
+section, one block per session type that has `tools` (today only "Build the next
+step"):
+
+```
+Agent harness
+ Build the next step
+  Tools    ☑ Read files  ☑ List files  ☑ Search  ☑ Write whole file  ☑ Edit part of file
+  Checks   ☑ Warn about links the preview blocks
+  Limits   Max steps [ 40 ] (1–40)   Time limit [ 15 ] min (1–15)
+  Always on  🔒 Stays inside the project folder   🔒 Writes only app/index.html
+                                                   [ Reset to defaults ]  [ Save ]
+```
+
+Saved in the app database (`app_data` key `harness`) as JSON per session type: the
+tools and hooks switched on, `maxSteps`, `timeoutMinutes`. Rust applies it when a
+build starts: `effective = registry ∩ saved` for tools and hooks, limits clamped to
+`1..=registry value`; unknown names are ignored, and nothing saved means the registry
+values. The UI only shows the choices; the narrowing is enforced in Rust, so a stale
+or edited saved value can never widen anything. Turning off every write tool is
+allowed (the agent can then only read and report); the step list will show its
+refusals.
 
 ### What the agent is given
 
@@ -276,7 +350,7 @@ story says "not supported yet" until their adapters exist.
 
 ## Left to the builder
 
-- Exact caps: `max_steps`, task timeout, tool output size.
+- Tool output size cap.
 - The `build-story` skill text (short; it can grow with use).
 - Glob and search implementation (an existing dependency if one fits, else std).
 - Where the step list and Stop button sit in the Build stage layout.
