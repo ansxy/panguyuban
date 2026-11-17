@@ -1,14 +1,21 @@
 //! Links the bundled `pangu` binary onto PATH.
 use std::path::{Path, PathBuf};
 
+const BIN_DIRS: [&str; 2] = ["/opt/homebrew/bin", "/usr/local/bin"];
+
 /// First of the usual bin folders that exists and is writable.
 pub fn cli_link_target() -> Option<PathBuf> {
-    ["/opt/homebrew/bin", "/usr/local/bin"].iter().map(PathBuf::from).find(|d| {
-        std::fs::metadata(d).map(|m| m.is_dir() && !m.permissions().readonly()).unwrap_or(false)
-            && std::fs::File::create(d.join(".pangu-write-test")).is_ok_and(|_| {
-                let _ = std::fs::remove_file(d.join(".pangu-write-test"));
-                true
-            })
+    BIN_DIRS.iter().map(PathBuf::from).find(|d| {
+        std::ffi::CString::new(d.as_os_str().as_encoded_bytes())
+            .is_ok_and(|c| unsafe { libc::access(c.as_ptr(), libc::W_OK) } == 0)
+    })
+}
+
+/// The `pangu` link in the first dir where it is a symlink to `bundled`.
+fn status_in(dirs: &[PathBuf], bundled: &Path) -> Option<PathBuf> {
+    dirs.iter().map(|d| d.join("pangu")).find(|l| {
+        std::fs::symlink_metadata(l).is_ok_and(|m| m.file_type().is_symlink())
+            && std::fs::read_link(l).is_ok_and(|t| t == bundled)
     })
 }
 
@@ -35,11 +42,11 @@ pub fn install_pangu() -> Result<String, String> {
     Ok(link_into(&dir, &source)?.display().to_string())
 }
 
-/// The link path, if `<target>/pangu` is a symlink to the bundled binary.
+/// The link path, if `<dir>/pangu` is a symlink to the bundled binary.
 #[tauri::command]
 pub fn pangu_status() -> Option<String> {
-    let link = cli_link_target()?.join("pangu");
-    (std::fs::read_link(&link).ok()? == bundled()?).then(|| link.display().to_string())
+    let dirs: Vec<PathBuf> = BIN_DIRS.iter().map(PathBuf::from).collect();
+    status_in(&dirs, &bundled()?).map(|p| p.display().to_string())
 }
 
 #[cfg(test)]
@@ -68,6 +75,14 @@ mod tests {
         let err = link_into(&bin, &a).unwrap_err();
         assert!(err.contains("is not a link"), "{err}");
         assert_eq!(std::fs::read_to_string(&link).unwrap(), "mine");
+
+        // status: only a link to the bundled binary counts
+        std::fs::remove_file(&link).unwrap();
+        let dirs = [dir.join("missing"), bin.clone()];
+        assert_eq!(status_in(&dirs, &a), None);
+        link_into(&bin, &a).unwrap();
+        assert_eq!(status_in(&dirs, &a), Some(link.clone()));
+        assert_eq!(status_in(&dirs, &b), None);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }
