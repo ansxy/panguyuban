@@ -1,0 +1,21 @@
+[package]
+name = "pangu-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "pangu"
+path = "src/main.rs"
+
+[dependencies]
+agent-runtime = { path = "../agent-runtime" }
+panguyuban-core = { path = "../panguyuban-core" }
+provider-openai = { path = "../provider-openai" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+dirs = "5"
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { builderHarnessSettings, builderSaveHarnessSettings, type HarnessSessionView } from "./api";
+import { builderHarnessSettings, builderSaveHarnessSettings, installPangu, panguStatus, type HarnessSessionView } from "./api";
 
 const LABELS: Record<string, string> = {
   read_file: "Read files",
@@ -7,6 +7,7 @@ const LABELS: Record<string, string> = {
   search: "Search",
   write_file: "Write whole file",
   edit_file: "Edit part of file",
+  run_command: "Run commands",
   no_external_urls: "Warn about links the preview blocks",
 };
 const label = (name: string) => LABELS[name] ?? name;
@@ -18,13 +19,40 @@ export function HarnessSection() {
     builderHarnessSettings().then(setViews).catch(() => setViews([]));
   }, []);
 
+  const [linked, setLinked] = useState<string | null>(null);
+  const [cliStatus, setCliStatus] = useState("");
+  useEffect(() => {
+    panguStatus().then(setLinked).catch(() => setLinked(null));
+  }, []);
+  async function install() {
+    try {
+      setLinked(await installPangu());
+      setCliStatus("");
+    } catch (err) {
+      setCliStatus(`Could not install: ${String(err)}`);
+    }
+  }
+
   return (
     <section className="settings-section">
       <div className="settings-aside">
         <h2>Agent harness</h2>
-        <p>What the agent may do while it builds. Engineering sets the most it may do; you can switch things off or lower the limits.</p>
+        <p>What the agent may do in the Build stage and in pangu. Engineering sets the most it may do; you can switch things off or lower the limits.</p>
       </div>
       <div className="settings-body">
+        <fieldset className="field-group">
+          <legend className="field-label">Command line</legend>
+          <p className="measured">Use the agent from any terminal: run pangu, or pangu claude.</p>
+          <div className="settings-save">
+            <button type="button" className="btn" onClick={install}>
+              {linked ? "Reinstall" : "Install pangu command"}
+            </button>
+            <span className="measured" role="status">
+              {linked ? `Installed at ${linked}` : cliStatus}
+            </span>
+          </div>
+          {linked && cliStatus && <p className="measured" role="status">{cliStatus}</p>}
+        </fieldset>
         {views.map((v) => (
           <HarnessSession key={v.session.id} view={v} onChange={setViews} />
         ))}

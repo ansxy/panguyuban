@@ -5,6 +5,8 @@ members = [
     "crates/provider-plane",
     "crates/provider-github",
     "crates/agent-runtime",
+    "crates/provider-openai",
+    "crates/pangu-cli",
     "apps/panguyuban-desktop/src-tauri",
 ]
 

@@ -466,8 +466,10 @@ mod tests {
     fn harness_settings_start_at_the_ceiling() {
         let store = SqliteStore::open_in_memory().unwrap();
         let views = harness_settings(&store);
-        assert_eq!(views.len(), 1);
+        assert_eq!(views.len(), 2);
         assert_eq!(views[0].session.id, "build-next-story");
+        assert_eq!(views[1].session.id, "work-on-project");
+        assert_eq!(views[1].max_steps, 200);
         assert_eq!(views[0].tools, s(&["read_file", "list_files", "search", "write_file", "edit_file"]));
         assert_eq!(views[0].max_steps, 40);
     }

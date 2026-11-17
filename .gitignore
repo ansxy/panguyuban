@@ -6,3 +6,6 @@ dist/
 
 # Files Claude sent during sessions (screenshots, samples)
 Claude outputs/
+
+# Staged pangu binary (scripts/build-pangu.sh)
+apps/panguyuban-desktop/src-tauri/binaries/

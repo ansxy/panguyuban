@@ -82,12 +82,42 @@ impl Harness {
     }
 }
 
+/// The messages of a chat that spans several turns.
+#[derive(Default)]
+pub struct Conversation {
+    messages: Vec<Value>,
+}
+
+impl Conversation {
+    pub fn new() -> Conversation {
+        Conversation::default()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.messages.is_empty()
+    }
+}
+
+/// Removes a trailing user prompt the model never answered, so the next turn does not send two in a row.
+fn drop_unanswered(messages: &mut Vec<Value>) {
+    if messages.last().is_some_and(|m| m["role"] == "user") {
+        messages.pop();
+    }
+}
+
 impl TaskRuntime for Harness {
     fn harness(&self) -> &'static str {
         NAME
     }
 
     fn run_task(&self, task: &Task, cancel: &AtomicBool, on_event: &dyn Fn(TaskEvent)) -> Result<TaskOutcome, RuntimeError> {
+        self.run_turn(task, &mut Conversation::new(), cancel, on_event)
+    }
+}
+
+impl Harness {
+    /// One turn: `task.prompt` joins `conversation` (which starts with `task.system` when empty)
+    /// and the loop runs until the model answers or a limit stops it. Steps count per turn.
+    pub fn run_turn(&self, task: &Task, conversation: &mut Conversation, cancel: &AtomicBool, on_event: &dyn Fn(TaskEvent)) -> Result<TaskOutcome, RuntimeError> {
         let ws = Workspace::new(&task.work_dir, &task.write_paths)
             .map_err(|e| RuntimeError::Failed { harness: NAME, detail: e.to_string() })?;
         let mut record = Record::open(task.record.as_deref());
@@ -95,10 +125,11 @@ impl TaskRuntime for Harness {
             "maxSteps": task.max_steps, "writePaths": task.write_paths}));
 
         let tools: Value = self.tools.iter().map(|t| t.definition()).collect();
-        let mut messages = vec![
-            json!({"role": "system", "content": task.system}),
-            json!({"role": "user", "content": task.prompt}),
-        ];
+        let messages = &mut conversation.messages;
+        if messages.is_empty() {
+            messages.push(json!({"role": "system", "content": task.system}));
+        }
+        messages.push(json!({"role": "user", "content": task.prompt}));
         let deadline = Instant::now() + task.timeout;
         let (mut steps, mut last_text) = (0u32, String::new());
 
@@ -110,12 +141,13 @@ impl TaskRuntime for Harness {
             if left.is_zero() {
                 break Some(StopReason::TimedOut);
             }
-            let reply = match self.chat.chat(&messages, &tools, task.model.as_deref(), left) {
+            let reply = match self.chat.chat(messages, &tools, task.model.as_deref(), left) {
                 Ok(r) => r,
                 Err(RuntimeError::TimedOut { .. }) => break Some(StopReason::TimedOut),
                 Err(_) if Instant::now() >= deadline => break Some(StopReason::TimedOut),
                 Err(e) => {
                     record.line(json!({"type": "error", "detail": e.to_string()}));
+                    drop_unanswered(messages);
                     return Err(e);
                 }
             };
@@ -125,6 +157,7 @@ impl TaskRuntime for Harness {
                 last_text = reply.text.clone();
             }
             if reply.tool_calls.is_empty() {
+                messages.push(json!({"role": "assistant", "content": reply.text}));
                 break None;
             }
             if !reply.text.is_empty() {
@@ -134,12 +167,20 @@ impl TaskRuntime for Harness {
                 "tool_calls": reply.tool_calls.iter().map(|c| json!({"id": c.id, "type": "function",
                     "function": {"name": c.name, "arguments": c.arguments}})).collect::<Vec<_>>()}));
 
-            for call in &reply.tool_calls {
-                if cancel.load(Ordering::Relaxed) {
-                    break 'run Some(StopReason::Cancelled);
-                }
-                if steps >= task.max_steps {
-                    break 'run Some(StopReason::MaxSteps);
+            for (i, call) in reply.tool_calls.iter().enumerate() {
+                let stop = if cancel.load(Ordering::Relaxed) {
+                    Some(StopReason::Cancelled)
+                } else if steps >= task.max_steps {
+                    Some(StopReason::MaxSteps)
+                } else {
+                    None
+                };
+                if stop.is_some() {
+                    // Every tool call needs an answer, or the next turn's request is invalid.
+                    for c in &reply.tool_calls[i..] {
+                        messages.push(json!({"role": "tool", "tool_call_id": c.id, "content": "not run: the turn was stopped"}));
+                    }
+                    break 'run stop;
                 }
                 steps += 1;
                 let result = self.call(&ws, call);
@@ -150,6 +191,7 @@ impl TaskRuntime for Harness {
             }
         };
 
+        drop_unanswered(messages);
         let outcome = TaskOutcome { message: last_text, steps, stopped };
         record.line(json!({"type": "outcome", "message": outcome.message, "steps": outcome.steps, "stopped": outcome.stopped}));
         Ok(outcome)
@@ -411,5 +453,55 @@ mod tests {
         };
         assert!(write("<img src=\"https://x\">").contains("The preview blocks them"));
         assert!(!write("<p>plain</p>").contains("The preview blocks them"));
+    }
+
+    #[test]
+    fn a_conversation_carries_over_between_turns() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = std::sync::Arc::new(Scripted(Mutex::new(vec![say("Hi"), say("Again")].into()), Mutex::new(vec![]), Mutex::new(vec![])));
+        let h = Harness { chat: Box::new(Shared(script.clone())), tools: vec![], hooks: vec![] };
+        let mut task = Task {
+            system: "SYSTEM".into(),
+            prompt: "one".into(),
+            model: None,
+            work_dir: dir.path().to_path_buf(),
+            write_paths: vec![],
+            max_steps: 5,
+            timeout: Duration::from_secs(60),
+            record: None,
+        };
+        let mut conv = Conversation::new();
+        assert!(conv.is_empty());
+        h.run_turn(&task, &mut conv, &AtomicBool::new(false), &|_| {}).unwrap();
+        task.prompt = "two".into();
+        h.run_turn(&task, &mut conv, &AtomicBool::new(false), &|_| {}).unwrap();
+        let sent = script.1.lock().unwrap().clone();
+        let roles: Vec<_> = sent[1].iter().map(|m| (m["role"].as_str().unwrap(), m["content"].as_str().unwrap())).collect();
+        assert_eq!(roles, vec![("system", "SYSTEM"), ("user", "one"), ("assistant", "Hi"), ("user", "two")]);
+    }
+
+    #[test]
+    fn a_failed_chat_drops_the_unanswered_prompt() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = std::sync::Arc::new(Scripted(Mutex::new(VecDeque::new()), Mutex::new(vec![]), Mutex::new(vec![])));
+        let h = Harness { chat: Box::new(Shared(script.clone())), tools: vec![], hooks: vec![] };
+        let mut task = Task {
+            system: "SYSTEM".into(),
+            prompt: "one".into(),
+            model: None,
+            work_dir: dir.path().to_path_buf(),
+            write_paths: vec![],
+            max_steps: 5,
+            timeout: Duration::from_secs(60),
+            record: None,
+        };
+        let mut conv = Conversation::new();
+        assert!(h.run_turn(&task, &mut conv, &AtomicBool::new(false), &|_| {}).is_err());
+        script.0.lock().unwrap().push_back(say("Hi"));
+        task.prompt = "two".into();
+        h.run_turn(&task, &mut conv, &AtomicBool::new(false), &|_| {}).unwrap();
+        let sent = script.1.lock().unwrap().clone();
+        let roles: Vec<_> = sent[1].iter().map(|m| (m["role"].as_str().unwrap(), m["content"].as_str().unwrap())).collect();
+        assert_eq!(roles, vec![("system", "SYSTEM"), ("user", "two")]);
     }
 }

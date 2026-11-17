@@ -51,24 +51,27 @@ impl Workspace {
     /// Writes a file the task may write, creating parent folders after the checks pass.
     pub fn write(&self, rel: &str, content: &str) -> Result<(), String> {
         let full = self.resolve(rel)?;
-        let normal: Vec<_> = Path::new(rel)
-            .components()
-            .filter_map(|c| match c {
-                Component::Normal(s) => Some(s.to_string_lossy().into_owned()),
-                _ => None,
-            })
-            .collect();
-        let normal = normal.join("/");
-        if !self.write_paths.iter().any(|w| w == "*" || *w == normal) {
-            return Err(format!("writing {rel} is not allowed; you can write: {}", self.write_paths.join(", ")));
-        }
         if std::fs::symlink_metadata(&full).is_ok_and(|m| m.file_type().is_symlink()) {
             return Err(format!("writing {rel} is not allowed: it is a symbolic link"));
         }
+        self.check_write(rel)?;
         if let Some(parent) = full.parent() {
             std::fs::create_dir_all(parent).map_err(|e| format!("cannot create folder for {rel}: {e}"))?;
         }
         std::fs::write(&full, content).map_err(|e| format!("cannot write {rel}: {e}"))
+    }
+
+    /// Whether `rel` may be written: never inside any `.git` folder (nested ones included), otherwise only the allowed paths.
+    pub fn check_write(&self, rel: &str) -> Result<(), String> {
+        // The canonical path, so `..` and linked folders cannot hide `.git` or the write list.
+        let normal = crate::relative_to(&self.root, rel).ok_or_else(|| format!("path is outside the project folder: {rel:?}"))?;
+        if normal.split('/').any(|c| c.eq_ignore_ascii_case(".git")) {
+            return Err("the .git folder is off limits".into());
+        }
+        if !self.write_paths.iter().any(|w| w == "*" || *w == normal) {
+            return Err(format!("writing {rel} is not allowed; you can write: {}", self.write_paths.join(", ")));
+        }
+        Ok(())
     }
 
     /// Path of `full` relative to the root, with forward slashes.
@@ -103,7 +106,7 @@ pub trait Tool: Send + Sync {
     fn run(&self, ws: &Workspace, args: &Value) -> ToolResult;
 }
 
-fn definition(name: &str, description: &str, properties: Value, required: &[&str]) -> Value {
+pub(crate) fn definition(name: &str, description: &str, properties: Value, required: &[&str]) -> Value {
     json!({"type": "function", "function": {
         "name": name,
         "description": description,
@@ -112,7 +115,7 @@ fn definition(name: &str, description: &str, properties: Value, required: &[&str
 }
 
 /// A required string argument, or a refusal naming the problem.
-fn str_arg<'a>(args: &'a Value, field: &str) -> Result<&'a str, ToolResult> {
+pub(crate) fn str_arg<'a>(args: &'a Value, field: &str) -> Result<&'a str, ToolResult> {
     args.get(field).and_then(Value::as_str).ok_or_else(|| {
         ToolResult::refused(format!("refused: bad {field}"), format!("missing or not a string: {field}"))
     })
@@ -374,6 +377,18 @@ mod tests {
         let r = run(&ws, "write_file", json!({"path":"app/index.html","content":"x"}));
         assert!(!r.ok && r.output.contains("symbolic link"));
         assert_eq!(fs::read_to_string(d.path().join("prd.md")).unwrap(), "spec");
+    }
+
+    #[test]
+    fn git_is_off_limits_even_with_star() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = Workspace::new(dir.path(), &["*".to_string()]).unwrap();
+        let err = ws.write(".git/config", "x").unwrap_err();
+        assert!(err.contains("off limits"));
+        assert!(!dir.path().join(".git").exists());
+        assert!(ws.check_write("a/.git/hooks/pre-commit").unwrap_err().contains("off limits"));
+        assert!(ws.check_write("a/b/.GIT/config").is_err());
+        assert!(ws.check_write("a/.gitignore").is_ok());
     }
 
     #[test]
