@@ -38,10 +38,12 @@ fn shell_quote(s: &str) -> String {
 
 pub fn hook_settings(pangu: &Path) -> Value {
     let bin = shell_quote(&pangu.to_string_lossy());
-    let entry = |verb: &str| {
-        json!([{"matcher": ".*", "hooks": [{"type": "command", "command": format!("{bin} {verb} --agent claude"), "timeout": 10}]}])
+    let entry = |verb: &str, on_fail: &str| {
+        let command = format!("{bin} {verb} --agent claude || {on_fail}");
+        json!([{"matcher": ".*", "hooks": [{"type": "command", "command": command, "timeout": 10}]}])
     };
-    json!({"hooks": {"PreToolUse": entry("check"), "PostToolUse": entry("record")}})
+    // Claude Code blocks only on exit 2, so any other failure of the check (missing binary, crash) becomes 2.
+    json!({"hooks": {"PreToolUse": entry("check", "exit 2"), "PostToolUse": entry("record", "true")}})
 }
 
 fn find_on_path(name: &str, path_var: &OsStr) -> Option<PathBuf> {
@@ -132,9 +134,9 @@ mod tests {
         let v = hook_settings(Path::new("/Applications/Panguyuban.app/Contents/MacOS/pangu"));
         assert_eq!(
             v["hooks"]["PreToolUse"][0]["hooks"][0]["command"],
-            "'/Applications/Panguyuban.app/Contents/MacOS/pangu' check --agent claude"
+            "'/Applications/Panguyuban.app/Contents/MacOS/pangu' check --agent claude || exit 2"
         );
-        assert!(v["hooks"]["PostToolUse"][0]["hooks"][0]["command"].as_str().unwrap().ends_with("' record --agent claude"));
+        assert!(v["hooks"]["PostToolUse"][0]["hooks"][0]["command"].as_str().unwrap().ends_with("' record --agent claude || true"));
     }
 
     #[test]

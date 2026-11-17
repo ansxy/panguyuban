@@ -34,6 +34,14 @@ fn main() {
                     exit(2);
                 }
             };
+            if session.is_some() {
+                // Deny before Claude Code's 10 s hook timeout, which would let the tool run.
+                std::thread::spawn(|| {
+                    std::thread::sleep(std::time::Duration::from_secs(8));
+                    eprintln!("pangu check took too long");
+                    exit(2);
+                });
+            }
             let outcome = catch_unwind(AssertUnwindSafe(|| match agent_arg(&args) {
                 Some(agent) => hook::check(agent, &stdin_text(), session.as_ref(), |s| {
                     session::policy_context(&session::open_store()?, s)
