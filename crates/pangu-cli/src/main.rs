@@ -25,7 +25,13 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         Some("check") => {
-            let session = Session::from_env();
+            let session = match Session::from_env() {
+                Ok(s) => s,
+                Err(reason) => {
+                    eprintln!("{reason}");
+                    exit(2);
+                }
+            };
             let outcome = catch_unwind(AssertUnwindSafe(|| match agent_arg(&args) {
                 Some(agent) => hook::check(agent, &stdin_text(), session.as_ref(), |s| {
                     session::policy_context(&session::open_store()?, s)
@@ -48,7 +54,7 @@ fn main() {
             }
         }
         Some("record") => {
-            if let (Some(agent), Some(s)) = (agent_arg(&args), Session::from_env()) {
+            if let (Some(agent), Some(s)) = (agent_arg(&args), Session::from_env().ok().flatten()) {
                 let _ = catch_unwind(AssertUnwindSafe(|| hook::record(agent, &stdin_text(), &s)));
             }
         }
@@ -58,6 +64,8 @@ fn main() {
                 exit(2);
             };
             let root = Session::from_env()
+                .ok()
+                .flatten()
                 .map(|s| s.root)
                 .unwrap_or_else(|| session::find_root(&std::env::current_dir().unwrap_or_default()));
             match session::open_store().and_then(|st| session::remember_command(&st, &root, command)) {

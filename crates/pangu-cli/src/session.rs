@@ -30,6 +30,8 @@ pub fn folder_slug(root: &Path) -> String {
 pub struct Session {
     pub id: String,
     pub root: PathBuf,
+    /// Where the run record lives; tests point it at a tempdir.
+    pub data: PathBuf,
 }
 
 impl Session {
@@ -39,13 +41,13 @@ impl Session {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
-        Session { id: format!("{secs}-{}", std::process::id()), root }
+        Session { id: format!("{secs}-{}", std::process::id()), root, data: data_dir() }
     }
 
-    /// Both variables are required and non-empty.
-    pub fn from_env() -> Option<Session> {
-        let get = |k| std::env::var(k).ok().filter(|v| !v.is_empty());
-        Some(Session { id: get("PANGU_SESSION")?, root: PathBuf::from(get("PANGU_ROOT")?) })
+    /// `None` only when `PANGU_SESSION` is unset or empty. A session without a folder is an error (deny).
+    pub fn from_env() -> Result<Option<Session>, String> {
+        let get = |k| std::env::var(k).ok();
+        session_from(get("PANGU_SESSION"), get("PANGU_ROOT"))
     }
 
     #[allow(dead_code)] // used by the launcher in Task 5
@@ -54,8 +56,14 @@ impl Session {
     }
 
     pub fn record_path(&self) -> PathBuf {
-        data_dir().join("runs").join(folder_slug(&self.root)).join(format!("{}.jsonl", self.id))
+        self.data.join("runs").join(folder_slug(&self.root)).join(format!("{}.jsonl", self.id))
     }
+}
+
+pub fn session_from(id: Option<String>, root: Option<String>) -> Result<Option<Session>, String> {
+    let Some(id) = id.filter(|v| !v.is_empty()) else { return Ok(None) };
+    let root = root.filter(|v| !v.is_empty()).ok_or("pangu session has no folder")?;
+    Ok(Some(Session { id, root: PathBuf::from(root), data: data_dir() }))
 }
 
 /// Appends one line to the record. Failures are ignored: the record never blocks work.
@@ -133,6 +141,16 @@ mod tests {
         if !tmp.path().ancestors().any(|d| d.join(".git").exists()) {
             assert_eq!(find_root(&bare), bare);
         }
+    }
+
+    #[test]
+    fn a_session_id_without_a_folder_is_an_error() {
+        let some = |s: &str| Some(s.to_string());
+        assert_eq!(session_from(some("1"), None).err().as_deref(), Some("pangu session has no folder"));
+        assert_eq!(session_from(some("1"), some("")).err().as_deref(), Some("pangu session has no folder"));
+        assert!(session_from(None, None).unwrap().is_none());
+        assert!(session_from(some(""), some("/x")).unwrap().is_none());
+        assert_eq!(session_from(some("1"), some("/x")).unwrap().unwrap().root, PathBuf::from("/x"));
     }
 
     #[test]

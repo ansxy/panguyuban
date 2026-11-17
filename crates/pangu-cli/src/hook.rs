@@ -96,7 +96,7 @@ mod tests {
     }
 
     fn run(root: &Path, payload: Value, settings: Option<&HarnessSettings>) -> HookOutcome {
-        let s = Session { id: "t-1".into(), root: root.to_path_buf() };
+        let s = Session { id: "t-1".into(), root: root.to_path_buf(), data: root.join("data") };
         check(Agent::Claude, &payload.to_string(), Some(&s), |_| Ok(pctx(root, settings)))
     }
 
@@ -131,7 +131,7 @@ mod tests {
     #[test]
     fn bad_input_inside_a_session_denies() {
         let tmp = tempfile::tempdir().unwrap();
-        let s = Session { id: "t-2".into(), root: tmp.path().to_path_buf() };
+        let s = Session { id: "t-2".into(), root: tmp.path().to_path_buf(), data: tmp.path().join("data") };
         let root = tmp.path();
         assert!(matches!(check(Agent::Claude, "not json", Some(&s), |_| Ok(pctx(root, None))), HookOutcome::Deny(_)));
         let out = check(Agent::Claude, "{}", Some(&s), |_| Err("db".into()));
