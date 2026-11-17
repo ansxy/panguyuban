@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { builderHarnessSettings, builderSaveHarnessSettings, type HarnessSessionView } from "./api";
+import { builderHarnessSettings, builderSaveHarnessSettings, installPangu, panguStatus, type HarnessSessionView } from "./api";
 
 const LABELS: Record<string, string> = {
   read_file: "Read files",
@@ -18,6 +18,20 @@ export function HarnessSection() {
     builderHarnessSettings().then(setViews).catch(() => setViews([]));
   }, []);
 
+  const [linked, setLinked] = useState<string | null>(null);
+  const [cliStatus, setCliStatus] = useState("");
+  useEffect(() => {
+    panguStatus().then(setLinked).catch(() => setLinked(null));
+  }, []);
+  async function install() {
+    try {
+      setLinked(await installPangu());
+      setCliStatus("");
+    } catch (err) {
+      setCliStatus(`Could not install: ${String(err)}`);
+    }
+  }
+
   return (
     <section className="settings-section">
       <div className="settings-aside">
@@ -25,6 +39,19 @@ export function HarnessSection() {
         <p>What the agent may do while it builds. Engineering sets the most it may do; you can switch things off or lower the limits.</p>
       </div>
       <div className="settings-body">
+        <fieldset className="field-group">
+          <legend className="field-label">Command line</legend>
+          <p className="measured">Use the agent from any terminal: run pangu, or pangu claude.</p>
+          <div className="settings-save">
+            <button type="button" className="btn" onClick={install}>
+              {linked ? "Reinstall" : "Install `pangu` command"}
+            </button>
+            <span className="measured" role="status">
+              {linked ? `Installed at ${linked}` : cliStatus}
+            </span>
+          </div>
+          {linked && cliStatus && <p className="measured" role="status">{cliStatus}</p>}
+        </fieldset>
         {views.map((v) => (
           <HarnessSession key={v.session.id} view={v} onChange={setViews} />
         ))}

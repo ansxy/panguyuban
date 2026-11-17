@@ -794,3 +794,18 @@ export async function builderSaveHarnessSettings(
   }
   return [];
 }
+
+export async function installPangu(): Promise<string> {
+  if (window.__TAURI_INTERNALS__?.invoke) {
+    return window.__TAURI_INTERNALS__.invoke<string>("install_pangu");
+  }
+  throw new Error("Only available in the desktop app");
+}
+
+/** The link path when `pangu` is installed from this app; null otherwise (and outside the app). */
+export async function panguStatus(): Promise<string | null> {
+  if (window.__TAURI_INTERNALS__?.invoke) {
+    return window.__TAURI_INTERNALS__.invoke<string | null>("pangu_status");
+  }
+  return null;
+}

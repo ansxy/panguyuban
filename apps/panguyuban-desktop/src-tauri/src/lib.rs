@@ -1,6 +1,7 @@
 mod agents;
 mod builder;
 mod calendar;
+mod cli_link;
 mod http;
 mod memory;
 mod provider;
@@ -960,6 +961,8 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            cli_link::install_pangu,
+            cli_link::pangu_status,
             get_dashboard_state,
             sync_providers,
             sync_plane,
