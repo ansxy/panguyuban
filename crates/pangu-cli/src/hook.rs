@@ -72,6 +72,10 @@ pub fn check(
 pub fn record(agent: Agent, stdin: &str, session: &Session) {
     let Agent::Claude = agent;
     let Ok(payload) = serde_json::from_str::<Value>(stdin) else { return };
+    // Only reads, writes and commands count toward the step limit; TodoWrite, skills and MCP tools do not.
+    if matches!(claude_action(&payload), Action::Other(_)) {
+        return;
+    }
     let mut input = payload["tool_input"].to_string();
     if let Some((i, _)) = input.char_indices().nth(2000) {
         input.truncate(i);
@@ -120,6 +124,16 @@ mod tests {
         assert_eq!(w(format!("{}/src/a.ts", repo.display())), HookOutcome::Silent);
         assert_eq!(w("/etc/hosts".into()), HookOutcome::Deny("writes outside the project are not allowed".into()));
         assert_eq!(w(format!("{}/.git/config", repo.display())), HookOutcome::Deny("the .git folder is off limits".into()));
+    }
+
+    #[test]
+    fn only_mapped_tools_count_as_steps() {
+        let tmp = tempfile::tempdir().unwrap();
+        let s = Session { id: "t-3".into(), root: tmp.path().to_path_buf(), data: tmp.path().join("data") };
+        for tool in ["TodoWrite", "Skill", "mcp__x__y", "Bash", "Read", "Edit"] {
+            record(Agent::Claude, &json!({"tool_name": tool, "tool_input": {}}).to_string(), &s);
+        }
+        assert_eq!(crate::session::count_calls(&s.record_path()), 3);
     }
 
     #[test]

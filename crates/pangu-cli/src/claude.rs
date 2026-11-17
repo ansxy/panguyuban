@@ -43,7 +43,7 @@ pub fn hook_settings(pangu: &Path) -> Value {
         json!([{"matcher": ".*", "hooks": [{"type": "command", "command": command, "timeout": 10}]}])
     };
     // Claude Code blocks only on exit 2, so any other failure of the check (missing binary, crash) becomes 2.
-    json!({"hooks": {"PreToolUse": entry("check", "exit 2"), "PostToolUse": entry("record", "true")}})
+    json!({"disableAllHooks": false, "hooks": {"PreToolUse": entry("check", "exit 2"), "PostToolUse": entry("record", "true")}})
 }
 
 fn find_on_path(name: &str, path_var: &OsStr) -> Option<PathBuf> {
@@ -82,6 +82,11 @@ pub fn ensure_plugin(data: &Path) -> std::io::Result<PathBuf> {
 }
 
 pub fn run(args: &[String]) -> i32 {
+    // Checked first: a second --settings could switch the guard rails off.
+    if args.iter().any(|a| a == "--settings" || a.starts_with("--settings=")) {
+        eprintln!("pangu claude adds its own --settings; put your settings in .claude/settings.json instead");
+        return 2;
+    }
     let Some(claude) = std::env::var_os("PATH").and_then(|p| find_on_path("claude", &p)) else {
         eprintln!("Claude Code (claude) is not installed or not on PATH");
         return 1;
@@ -137,6 +142,14 @@ mod tests {
             "'/Applications/Panguyuban.app/Contents/MacOS/pangu' check --agent claude || exit 2"
         );
         assert!(v["hooks"]["PostToolUse"][0]["hooks"][0]["command"].as_str().unwrap().ends_with("' record --agent claude || true"));
+        assert_eq!(v["disableAllHooks"], false);
+    }
+
+    #[test]
+    fn a_user_settings_flag_is_refused() {
+        // Returns before looking for claude, so nothing is launched.
+        assert_eq!(run(&["--settings".into(), "x.json".into()]), 2);
+        assert_eq!(run(&["--settings=x.json".into()]), 2);
     }
 
     #[test]
@@ -175,17 +188,12 @@ mod tests {
 
     #[test]
     fn path_lookup_ignores_empty_entries_and_non_executables() {
-        let (a, b, cwd) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
-        script(cwd.path(), 0o755);
+        let (a, b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
         script(a.path(), 0o644);
         script(b.path(), 0o755);
-        let prev = std::env::current_dir().unwrap();
-        std::env::set_current_dir(cwd.path()).unwrap();
-        let only_empty = find_on_path("claude", OsStr::new(""));
+        assert_eq!(find_on_path("claude", OsStr::new("")), None);
+        assert_eq!(find_on_path("claude", OsStr::new("relative/bin")), None);
         let joined = std::env::join_paths([a.path(), b.path()]).unwrap();
-        let found = find_on_path("claude", &joined);
-        std::env::set_current_dir(prev).unwrap();
-        assert_eq!(only_empty, None);
-        assert_eq!(found, Some(b.path().join("claude")));
+        assert_eq!(find_on_path("claude", &joined), Some(b.path().join("claude")));
     }
 }
