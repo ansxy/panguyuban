@@ -134,6 +134,30 @@ Never type, paste or store a token or password for me; I enter those in the
 app's Settings. Do not change system settings.
 ```
 
+## The `pangu` command
+
+`pangu` runs an agent from any terminal, inside the folder you start it in (the git
+repository root, or the folder itself outside a repository). macOS and Linux only.
+
+Install it from the app: **Settings → Agent harness → Install pangu command**. This
+links the copy inside the app into `/opt/homebrew/bin` or `/usr/local/bin`.
+
+- `pangu` starts Panguyuban's own agent loop, using a provider saved in Settings →
+  Providers. Pick another with `pangu --provider <name> --model <id>`; the last choice
+  that worked is remembered. Before each command it asks: `y` allow once, `a` always in
+  this folder, `n` deny. `pangu allow "<command>"` always allows one ahead of time.
+  Ctrl-C stops the current turn; a second Ctrl-C quits.
+- `pangu claude [args]` starts Claude Code with Panguyuban's skills and guard rails. The
+  guard rails block writes outside the folder or into `.git`, tools switched off in
+  Settings → Agent harness, and writes or commands past the step limit. Everything else
+  is left to Claude Code.
+
+On macOS the first `pangu` run asks for access to the provider key in the keychain.
+Choose **Always Allow** so it does not ask again.
+
+Each run is recorded, one JSON line per step, in `runs/<folder>/<session>.jsonl` next to
+`state.db`.
+
 ## Development
 
 ```sh
