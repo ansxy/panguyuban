@@ -147,7 +147,7 @@ export function App(): React.JSX.Element {
   const [features, setFeature] = useFeatures();
   const agents = useAgents(section === "agents", features.agents);
   const builder = useBuilder(features.prototypes);
-  const spaces = useSpaces();
+  const spaces = useSpaces(agents.sessions);
   const requests = useRequests();
   // Set by an agent's "Hand off": opens the Memory view's composer on that folder.
   const [handoffPrefill, setHandoffPrefill] = useState<HandoffPrefill | null>(null);

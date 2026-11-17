@@ -293,6 +293,8 @@ export interface AgentSession {
   harness: "claude" | "antigravity";
   session_id: string;
   pid: number;
+  /** The process group it runs in; matches a terminal pane's foreground group. */
+  pgid: number;
   cwd: string;
   name: string;
   status: AgentStatus;
@@ -522,6 +524,8 @@ export function termClose(id: number): Promise<void> {
 export interface TermInfo {
   command: string;
   cwd: string;
+  /** The foreground process group, to tell which agent runs in the pane. */
+  pgid: number;
 }
 
 /** The pane's foreground program and folder, for its header. */

@@ -19,8 +19,8 @@ export function TerminalView(props: {
   run?: string;
   focused: boolean;
   onFocus: () => void;
-  /** The shell's current folder, so the space can follow it. */
-  onCwd: (cwd: string) => void;
+  /** The shell's folder and foreground process, so the space can follow it and save it. */
+  onInfo: (info: TermInfo) => void;
   onSplit: (dir: "row" | "col") => void;
   onClose: () => void;
 }) {
@@ -32,8 +32,8 @@ export function TerminalView(props: {
   const ranRef = useRef(false);
   const onCloseRef = useRef(props.onClose);
   onCloseRef.current = props.onClose;
-  const onCwdRef = useRef(props.onCwd);
-  onCwdRef.current = props.onCwd;
+  const onInfoRef = useRef(props.onInfo);
+  onInfoRef.current = props.onInfo;
 
   useEffect(() => {
     const host = hostRef.current!;
@@ -120,7 +120,7 @@ export function TerminalView(props: {
     const poll = () =>
       termInfo(id).then((next) => {
         setInfo(next);
-        onCwdRef.current(next.cwd);
+        onInfoRef.current(next);
       }, () => {});
     poll();
     const timer = setInterval(poll, INFO_POLL_MS);
