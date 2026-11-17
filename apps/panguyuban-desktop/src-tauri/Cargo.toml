@@ -21,6 +21,7 @@ libc = "0.2"
 panguyuban-core = { path = "../../../crates/panguyuban-core" }
 portable-pty = "0.9"
 provider-github = { path = "../../../crates/provider-github" }
+provider-openai = { path = "../../../crates/provider-openai" }
 provider-plane = { path = "../../../crates/provider-plane" }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 rrule = "0.14"
