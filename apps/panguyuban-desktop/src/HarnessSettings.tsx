@@ -7,6 +7,7 @@ const LABELS: Record<string, string> = {
   search: "Search",
   write_file: "Write whole file",
   edit_file: "Edit part of file",
+  run_command: "Run commands",
   no_external_urls: "Warn about links the preview blocks",
 };
 const label = (name: string) => LABELS[name] ?? name;
@@ -36,7 +37,7 @@ export function HarnessSection() {
     <section className="settings-section">
       <div className="settings-aside">
         <h2>Agent harness</h2>
-        <p>What the agent may do while it builds. Engineering sets the most it may do; you can switch things off or lower the limits.</p>
+        <p>What the agent may do in the Build stage and in pangu. Engineering sets the most it may do; you can switch things off or lower the limits.</p>
       </div>
       <div className="settings-body">
         <fieldset className="field-group">
@@ -44,7 +45,7 @@ export function HarnessSection() {
           <p className="measured">Use the agent from any terminal: run pangu, or pangu claude.</p>
           <div className="settings-save">
             <button type="button" className="btn" onClick={install}>
-              {linked ? "Reinstall" : "Install `pangu` command"}
+              {linked ? "Reinstall" : "Install pangu command"}
             </button>
             <span className="measured" role="status">
               {linked ? `Installed at ${linked}` : cliStatus}
