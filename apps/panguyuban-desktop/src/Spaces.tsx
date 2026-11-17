@@ -1,5 +1,6 @@
-import React, { useEffect, useState } from "react";
-import { SpaceStatus, spaceStatus } from "./api";
+import React, { useEffect, useRef, useState } from "react";
+import { type AgentSession, SpaceStatus, spaceStatus, type TermInfo } from "./api";
+import { maxId, parseSaved, snapshot } from "./spaces_saved";
 import { TerminalView } from "./Terminal";
 
 /** A tab's panes: a leaf is one terminal (started in `cwd`), a split divides its box (`ratio` to `a`, half by default). */
@@ -12,6 +13,10 @@ export type Space = { id: string; tabs: TermTab[]; activeTab: string };
 
 const STATUS_POLL_MS = 5_000;
 const HOME = "~";
+const SAVED_KEY = "panguyuban.spaces";
+// After launch, resumed agents take a few seconds to start and be seen; until then the
+// saved layout (with their resume commands) is left as it was.
+const RESTORE_GRACE_MS = 8_000;
 
 let seq = 0;
 const newId = () => `t${++seq}`;
@@ -82,20 +87,61 @@ function currentTabOf(space: Space | undefined): TermTab | undefined {
   return space?.tabs.find((t) => t.id === space.activeTab) ?? space?.tabs.at(-1);
 }
 
-/** Spaces and their terminal tabs, for this launch only (shells don't outlive the app). */
-export function useSpaces() {
-  const [list, setList] = useState<Space[]>(() => [newSpace()]);
-  const [activeId, setActiveId] = useState("");
+function findLeaf(node: PaneNode, id: string): PaneLeaf | undefined {
+  if ("pane" in node) return node.pane === id ? node : undefined;
+  return findLeaf(node.a, id) ?? findLeaf(node.b, id);
+}
+
+/** Last launch's spaces, with new ids continuing after the saved ones. */
+function restoreSpaces() {
+  let raw: string | null = null;
+  try {
+    raw = localStorage.getItem(SAVED_KEY);
+  } catch {
+    // storage unavailable: start with one fresh space
+  }
+  const saved = parseSaved(raw);
+  if (saved) seq = Math.max(seq, maxId(saved));
+  return saved;
+}
+
+/**
+ * Spaces and their terminal tabs. Shells end with the app, but the layout is saved:
+ * the next launch reopens each pane in its folder, and resumes an agent that ran in it.
+ */
+export function useSpaces(sessions: AgentSession[]) {
+  const [restored] = useState(restoreSpaces);
+  const [list, setList] = useState<Space[]>(() => restored?.spaces ?? [newSpace()]);
+  const [activeId, setActiveId] = useState(restored?.activeId ?? "");
   // pane id -> the folder its shell is in now (`~`-relative), reported by each pane.
   const [paneCwd, setPaneCwd] = useState<Record<string, string>>({});
+  // pane id -> its foreground process group, to find the agent running in it.
+  const [paneGroup, setPaneGroup] = useState<Record<string, number>>({});
   const [status, setStatus] = useState<Record<string, SpaceStatus>>({});
+  const launchedAt = useRef(Date.now());
 
   const active = list.find((s) => s.id === activeId) ?? list[0];
   const currentTab = currentTabOf(active);
   const cwdOf = (space: Space | undefined): string => {
     const tab = currentTabOf(space);
-    return (tab && paneCwd[tab.focused]) ?? HOME;
+    if (!tab) return HOME;
+    // Until a pane reports, the folder it was opened in.
+    return paneCwd[tab.focused] ?? findLeaf(tab.root, tab.focused)?.cwd ?? HOME;
   };
+
+  // Saved shortly after each change, so quitting at any moment keeps the last state.
+  useEffect(() => {
+    const wait = Math.max(500, RESTORE_GRACE_MS - (Date.now() - launchedAt.current));
+    const timer = setTimeout(() => {
+      try {
+        const saved = snapshot(list, active?.id ?? "", { cwd: paneCwd, group: paneGroup }, sessions);
+        localStorage.setItem(SAVED_KEY, JSON.stringify(saved));
+      } catch {
+        // storage unavailable: this launch's layout is not kept
+      }
+    }, wait);
+    return () => clearTimeout(timer);
+  }, [list, active?.id, paneCwd, paneGroup, sessions]);
 
   const cwds = [...new Set(list.map(cwdOf))];
   useEffect(() => {
@@ -203,8 +249,10 @@ export function useSpaces() {
     closeFocused: () => active && currentTab && closePane(active.id, currentTab.id, currentTab.focused),
     focusPane: (spaceId: string, tabId: string, paneId: string) =>
       updateTab(spaceId, tabId, (t) => (t.focused === paneId ? t : { ...t, focused: paneId })),
-    reportCwd: (paneId: string, cwd: string) =>
-      setPaneCwd((all) => (all[paneId] === cwd ? all : { ...all, [paneId]: cwd })),
+    reportInfo: (paneId: string, info: TermInfo) => {
+      setPaneCwd((all) => (all[paneId] === info.cwd ? all : { ...all, [paneId]: info.cwd }));
+      setPaneGroup((all) => (all[paneId] === info.pgid ? all : { ...all, [paneId]: info.pgid }));
+    },
   };
 }
 
@@ -301,7 +349,7 @@ export function TerminalStages(props: { spaces: SpacesState; shown: boolean }) {
                     run={leaf.run}
                     focused={visible && tab.focused === leaf.pane}
                     onFocus={() => spaces.focusPane(space.id, tab.id, leaf.pane)}
-                    onCwd={(cwd) => spaces.reportCwd(leaf.pane, cwd)}
+                    onInfo={(info) => spaces.reportInfo(leaf.pane, info)}
                     onSplit={(dir) => spaces.split(space.id, tab.id, leaf.pane, dir)}
                     onClose={() => spaces.closePane(space.id, tab.id, leaf.pane)}
                   />

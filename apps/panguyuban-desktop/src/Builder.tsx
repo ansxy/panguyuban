@@ -5,10 +5,25 @@ import {
   builderInterviewTurn,
   builderModels,
   builderPlan,
+  builderReviewStep,
   builderSavePrd,
   HarnessStatus,
 } from "./api";
 import { modelsForHarness, useProviders } from "./providers";
+import { TeamFlow } from "./TeamFlow";
+import type { ReviewRole } from "./api";
+import {
+  earlierFor,
+  interrupt,
+  isStale,
+  nextWave,
+  retryFrom,
+  reviewState,
+  reviewSummary,
+  setNode,
+  startReview,
+  type TeamReview,
+} from "./team_review";
 import {
   agentById,
   agentModel,
@@ -22,6 +37,7 @@ import {
   applyDesign,
   applyPlan,
   approvePrd,
+  record,
   askEngineer,
   AssignMode,
   assignStory,
@@ -107,6 +123,10 @@ export function useBuilder(enabled = true) {
   }, [enabled]);
 
   const project = projects.find((p) => p.id === selectedId) ?? null;
+  // Latest projects, readable from async loops that outlive a render.
+  const latest = useRef(projects);
+  latest.current = projects;
+  const projectById = (id: string): Project | undefined => latest.current.find((p) => p.id === id);
 
   /** Models for a harness: undefined while loading, "error" if it could not be listed. */
   function modelsFor(harness: string) {
@@ -161,6 +181,7 @@ export function useBuilder(enabled = true) {
     select: setSelectedId,
     update,
     updateById,
+    projectById,
     create,
     remove,
     liveAgents,
@@ -254,7 +275,116 @@ export function useAgentTurn(builder: Builder, project: Project): "interview" | 
   return project.stage === "plan" ? "plan" : "interview";
 }
 
+/** Reviews running. Module-level so a re-mount cannot start a second run for one project. */
+const reviewsInFlight = new Set<string>();
+const reviewListeners = new Set<() => void>();
+const setInFlight = (id: string, on: boolean) => {
+  if (on) reviewsInFlight.add(id);
+  else reviewsInFlight.delete(id);
+  reviewListeners.forEach((l) => l());
+};
+
+export function isReviewInFlight(projectId: string): boolean {
+  return reviewsInFlight.has(projectId);
+}
+
+/** Rerenders the caller whenever any review starts or stops. */
+export function useReviewInFlight(): void {
+  const [, rerender] = useState(0);
+  useEffect(() => {
+    const l = () => rerender((n) => n + 1);
+    reviewListeners.add(l);
+    return () => void reviewListeners.delete(l);
+  }, []);
+}
+
+/** Runs the review wave by wave, saving each result as it lands; late results for a changed PRD or newer review are dropped. */
+export async function runTeamReview(builder: Builder, projectId: string, review: TeamReview): Promise<void> {
+  if (reviewsInFlight.has(projectId)) return;
+  setInFlight(projectId, true);
+  let local = review;
+  /** Returns false when the loop must stop: the review was replaced, or the PRD changed or was approved. */
+  const save = (next: TeamReview, note?: string): boolean => {
+    const before = local;
+    local = next;
+    const cur = builder.projectById(projectId);
+    if (!cur) return false;
+    // ">" not "!==": the ref lags render, so a missing or older review is not-yet-rendered, not replaced.
+    if (cur.teamReview && cur.teamReview.startedAt > local.startedAt) return false;
+    // Approving rewrites the PRD's Status line, so a PRD approved mid-run counts as changed too.
+    if (isStale(local, prdMarkdown(cur))) {
+      // The wave's results are dropped: interrupt the state from before them.
+      const stopped = interrupt(before, Date.now());
+      builder.updateById(projectId, (p) =>
+        p.teamReview?.startedAt === stopped.startedAt ? { ...p, teamReview: stopped } : p,
+      );
+      return false;
+    }
+    builder.updateById(projectId, (p) => {
+      if (!p.teamReview || p.teamReview.startedAt !== next.startedAt) return p;
+      if (isStale(p.teamReview, prdMarkdown(p))) return p;
+      const saved = { ...p, teamReview: next };
+      return note ? record(saved, "review", note) : saved;
+    });
+    return true;
+  };
+  try {
+    for (;;) {
+      const wave = nextWave(local);
+      if (!wave.length) break;
+      let marked = local;
+      for (const role of wave) marked = setNode(marked, role, { status: "working", error: null }, Date.now());
+      if (!save(marked)) break;
+      const agent = agentById(builder.projectById(projectId)?.interviewAgent ?? null);
+      const base = local;
+      const results = await Promise.allSettled(
+        wave.map((role) => {
+          if (!agent) return Promise.reject("No agent connected");
+          return builderReviewStep({
+            projectId,
+            projectName: builder.projectById(projectId)?.name ?? "",
+            harness: agent.harness,
+            model: agent.model,
+            role,
+            prd: base.prd,
+            earlier: earlierFor(base, role),
+          });
+        }),
+      );
+      let next = local;
+      results.forEach((r, i) => {
+        next = setNode(
+          next,
+          wave[i],
+          r.status === "fulfilled"
+            ? { status: "done", result: r.value, error: null }
+            : { status: "failed", error: r.reason instanceof Error ? r.reason.message : String(r.reason) },
+          Date.now(),
+        );
+      });
+      const finished = reviewState(local) === "running" && reviewState(next) !== "running";
+      if (!save(next, finished ? "Team review: " + reviewSummary(next) : undefined)) break;
+    }
+  } finally {
+    setInFlight(projectId, false);
+  }
+}
+
 export type Builder = ReturnType<typeof useBuilder>;
+
+/** A team can review any PRD an agent wrote, approved or not; on an approved one it only advises. */
+export function canTeamReview(p: Project): boolean {
+  return isLive(p) && !!p.prdText;
+}
+
+/** Starts a fresh review of the project's current PRD, from the PRD tab or the Agents page. */
+export function startTeamReview(builder: Builder, projectId: string): void {
+  const p = builder.projectById(projectId);
+  if (!p || !canTeamReview(p) || isReviewInFlight(projectId)) return;
+  const fresh = startReview(prdMarkdown(p), Date.now());
+  builder.updateById(projectId, (q) => ({ ...q, teamReview: fresh }));
+  void runTeamReview(builder, projectId, fresh);
+}
 
 export function BuilderView({ builder }: { builder: Builder }) {
   const { project, loaded, loadError } = builder;
@@ -847,13 +977,7 @@ function InspectorPane({ builder, project }: { builder: Builder; project: Projec
                 if (!action.run) return;
                 const next = action.run(project);
                 builder.update(action.run);
-                // Approval changes the document, so the saved prd.md is brought in line.
-                if (project.prdText && !project.prdApproved && next.prdApproved) {
-                  const id = project.id;
-                  builderSavePrd({ projectId: id, projectName: project.name, content: prdMarkdown(next) })
-                    .then((path) => builder.updateById(id, (p) => ({ ...p, prdPath: path })))
-                    .catch(() => undefined);
-                }
+                saveApproved(builder, project, next);
                 // The handover goes in the prototype's folder, beside the PRD and the prototype.
                 if (!project.handover && next.handover) {
                   void builderSavePrd({
@@ -1191,7 +1315,26 @@ function PreviewTab({ project }: { project: Project }) {
   );
 }
 
+/** Approval changes the document, so the saved prd.md is brought in line. */
+function saveApproved(builder: Builder, project: Project, next: Project) {
+  if (project.prdText && !project.prdApproved && next.prdApproved) {
+    const id = project.id;
+    builderSavePrd({ projectId: id, projectName: project.name, content: prdMarkdown(next) })
+      .then((path) => builder.updateById(id, (p) => ({ ...p, prdPath: path })))
+      .catch(() => undefined);
+  }
+}
+
 function PrdTab({ builder, project }: { builder: Builder; project: Project }) {
+  // Ticks only while a review runs, for the elapsed time.
+  const [now, setNow] = useState(Date.now());
+  useReviewInFlight();
+  const running = isReviewInFlight(project.id);
+  useEffect(() => {
+    if (!running) return;
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [running]);
   if (isLive(project) ? !project.prdText : answeredCount(project) === 0) {
     return (
       <div className="builder-empty">
@@ -1200,9 +1343,74 @@ function PrdTab({ builder, project }: { builder: Builder; project: Project }) {
       </div>
     );
   }
+  const review = project.teamReview;
+  const canReview = canTeamReview(project);
+  const stale = !!review && isStale(review, prdMarkdown(project));
+  const waiting = awaitingApproval(project);
+  const fixes =
+    review && reviewState(review) === "done" && waiting && !stale ? (review.nodes.leader.result?.fixes ?? "") : "";
+  function start() {
+    startTeamReview(builder, project.id);
+  }
+  function retry(role: ReviewRole) {
+    if (!review) return;
+    const again = retryFrom(review, role);
+    builder.update((p) => ({ ...p, teamReview: again }));
+    void runTeamReview(builder, project.id, again);
+  }
   return (
     <>
       {project.prdPath && <span className="field-help">Saved to {project.prdPath}</span>}
+      {canReview && (
+        <div className="action-group">
+          <button type="button" className="btn" disabled={running} onClick={start}>
+            {review ? "Run again" : "Review with team"}
+          </button>
+        </div>
+      )}
+      {review && (
+        <TeamFlow
+          key={review.startedAt}
+          review={review}
+          now={now}
+          running={running}
+          onRetry={!stale ? retry : undefined}
+        />
+      )}
+      {review && (
+        <div className="action-group">
+          {fixes && (
+            <button type="button" className="btn" onClick={() => builder.update((p) => userSays(p, fixes))}>
+              Apply fixes
+            </button>
+          )}
+          {canReview && waiting && (
+            <button
+              type="button"
+              className="btn"
+              onClick={() => {
+                builder.update(approvePrd);
+                saveApproved(builder, project, approvePrd(project));
+              }}
+            >
+              Approve anyway
+            </button>
+          )}
+        </div>
+      )}
+      {review && stale && (
+        <p className="team-flow-note">
+          PRD changed since this review.{" "}
+          {canReview && (
+            <button type="button" className="btn" disabled={running} onClick={start}>
+              Run again
+            </button>
+          )}
+        </p>
+      )}
+      {review && reviewState(review) === "stopped" && (
+        <p className="team-flow-note">No specialist could finish, so the review stopped.</p>
+      )}
       <pre className="doc-view">{prdMarkdown(project)}</pre>
       {project.stage === "interview" && !isLive(project) && !project.prdText && (
         <div className="action-group">

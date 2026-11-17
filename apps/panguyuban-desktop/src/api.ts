@@ -293,6 +293,8 @@ export interface AgentSession {
   harness: "claude" | "antigravity";
   session_id: string;
   pid: number;
+  /** The process group it runs in; matches a terminal pane's foreground group. */
+  pgid: number;
   cwd: string;
   name: string;
   status: AgentStatus;
@@ -439,6 +441,37 @@ export async function builderPlan(args: {
   throw new Error("A real agent needs the desktop app");
 }
 
+export type ReviewRole = "engineer" | "ux" | "qa" | "contrarian" | "leader";
+
+export interface Finding {
+  severity: "blocker" | "suggestion";
+  step: string | null;
+  text: string;
+}
+
+export interface RoleReview {
+  role: ReviewRole;
+  findings: Finding[];
+  verdict: string;
+  fixes: string;
+}
+
+/** Runs one reviewer's turn over the PRD. Nothing is saved. */
+export async function builderReviewStep(args: {
+  projectId: string;
+  projectName: string;
+  harness: string;
+  model: string | null;
+  role: ReviewRole;
+  prd: string;
+  earlier: RoleReview[];
+}): Promise<RoleReview> {
+  if (window.__TAURI_INTERNALS__?.invoke) {
+    return window.__TAURI_INTERNALS__.invoke<RoleReview>("builder_review_step", { args });
+  }
+  throw new Error("A real agent needs the desktop app");
+}
+
 export interface DesignResult {
   message: string;
   html: string;
@@ -491,6 +524,8 @@ export function termClose(id: number): Promise<void> {
 export interface TermInfo {
   command: string;
   cwd: string;
+  /** The foreground process group, to tell which agent runs in the pane. */
+  pgid: number;
 }
 
 /** The pane's foreground program and folder, for its header. */

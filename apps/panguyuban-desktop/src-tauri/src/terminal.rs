@@ -29,6 +29,8 @@ pub struct Terminals {
 pub struct TermInfo {
     pub command: String,
     pub cwd: String,
+    /// The foreground process group, to match an agent session to its pane.
+    pub pgid: i32,
 }
 
 /// `~` and `~/x` are relative to the home folder; other paths pass through.
@@ -129,7 +131,7 @@ impl Terminals {
             Some(rest) => format!("~{rest}"),
             None => cwd,
         };
-        Ok(TermInfo { command: proc_name(pid), cwd })
+        Ok(TermInfo { command: proc_name(pid), cwd, pgid: pid })
     }
 
     pub fn close(&self, id: u32) {
@@ -211,6 +213,7 @@ mod tests {
             info = terms.info(id).unwrap();
         }
         assert_eq!(info.command, "sleep");
+        assert!(info.pgid > 0);
         assert!(info.cwd.ends_with("/tmp"), "cwd was {}", info.cwd);
         terms.close(id);
         terms.close(id);

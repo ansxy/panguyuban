@@ -10,6 +10,7 @@
 mod antigravity;
 mod claude;
 mod process;
+mod review;
 
 use std::path::Path;
 use std::time::Duration;
@@ -18,6 +19,7 @@ use serde::{Deserialize, Serialize};
 
 pub use antigravity::AntigravityRuntime;
 pub use claude::ClaudeRuntime;
+pub use review::*;
 
 /// The interview skill and its template ship inside the binary.
 const INTERVIEW_SKILL: &str = include_str!("../../../skills/product/prd-interview/SKILL.md");

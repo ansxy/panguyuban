@@ -3468,3 +3468,65 @@ html[data-resizing="row"] {
 .status-select:disabled {
   color: var(--color-muted);
 }
+
+.team-flow { display: grid; gap: var(--space-sm); margin: var(--space-md) 0; }
+.team-flow-graph { display: flex; align-items: center; gap: var(--space-md); overflow-x: auto; }
+.team-flow-col { display: grid; gap: var(--space-xs); }
+.team-flow-prd { font-family: var(--font-outlier); font-size: var(--text-xs); color: var(--color-muted); }
+.team-flow-arrow { flex: none; color: var(--color-muted); }
+.team-flow-node {
+  display: grid; grid-template-columns: auto 1fr; column-gap: var(--space-xs); align-items: center;
+  min-width: 9rem; padding: var(--space-xs) var(--space-sm);
+  border: var(--rule-hair) solid var(--color-rule); background: var(--color-paper-2);
+  color: var(--color-ink); font: inherit; text-align: left; cursor: pointer;
+}
+.team-flow-node[aria-pressed="true"] { border-color: var(--color-accent); }
+.team-flow-node:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 2px; }
+.team-flow-sub { grid-column: 2; font-size: var(--text-xs); color: var(--color-muted); }
+.team-flow-dot { grid-row: span 2; width: 10px; height: 10px; border-radius: 50%; background: var(--color-rule-2); }
+.team-flow-node.is-working { border-style: dashed; border-color: var(--color-accent); }
+.team-flow-node.is-working .team-flow-dot { background: var(--color-accent); }
+.team-flow-node.is-done .team-flow-dot { background: var(--color-ok); }
+.team-flow-node.is-failed .team-flow-dot { background: var(--color-bad); }
+.team-flow-detail { padding: var(--space-sm); border: var(--rule-hair) solid var(--color-rule); background: var(--color-paper-2); }
+.team-flow-findings { margin: var(--space-xs) 0 0; padding-left: var(--space-md); font-size: var(--text-sm); }
+.team-flow-tag.is-blocker { color: var(--color-bad); background: var(--color-bad-soft); }
+.team-flow-tag.is-suggestion { color: var(--color-cool); background: var(--color-cool-soft); }
+.team-flow-error { color: var(--color-bad); }
+.team-flow-note { font-size: var(--text-sm); color: var(--color-ink-2); }
+@media (prefers-reduced-motion: no-preference) {
+  .team-flow-node.is-working .team-flow-dot { animation: team-flow-pulse 1.2s ease-in-out infinite; }
+}
+@keyframes team-flow-pulse { 50% { opacity: 0.35; } }
+
+.agents-strip { display: flex; gap: 2px; }
+.agents-strip > span { flex: 1; height: 4px; border-radius: 2px; background: var(--color-rule-2); }
+.agents-strip > .is-working { background: var(--color-accent); }
+.agents-strip > .is-done { background: var(--color-ok); }
+.agents-strip > .is-failed { background: var(--color-bad); }
+
+/* Agents: Sessions | Teams tabs, and the start-a-review row on Teams. */
+.agents-tabs {
+  padding: 0 var(--space-md);
+}
+
+.agents-start {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-xs);
+  align-items: center;
+  padding: var(--space-sm) var(--space-md);
+  border-bottom: var(--rule-hair) solid var(--color-rule);
+}
+
+.agents-start select {
+  flex: 1 1 10rem;
+  min-width: 0;
+  min-height: 36px;
+  padding: 0 var(--space-sm);
+  border: var(--rule-hair) solid var(--color-rule-2);
+  border-radius: var(--radius-pill);
+  background: var(--color-paper-2);
+  color: var(--color-ink);
+  font-size: var(--text-sm);
+}
