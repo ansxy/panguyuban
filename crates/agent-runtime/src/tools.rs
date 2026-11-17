@@ -62,6 +62,9 @@ impl Workspace {
         if !self.write_paths.iter().any(|w| w == "*" || *w == normal) {
             return Err(format!("writing {rel} is not allowed; you can write: {}", self.write_paths.join(", ")));
         }
+        if std::fs::symlink_metadata(&full).is_ok_and(|m| m.file_type().is_symlink()) {
+            return Err(format!("writing {rel} is not allowed: it is a symbolic link"));
+        }
         if let Some(parent) = full.parent() {
             std::fs::create_dir_all(parent).map_err(|e| format!("cannot create folder for {rel}: {e}"))?;
         }
@@ -358,6 +361,19 @@ mod tests {
         assert!(!run(&ws, "write_file", json!({"path":"dangling","content":"x"})).ok);
         assert!(!other.path().join("b.txt").exists());
         assert!(!other.path().join("c.txt").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_write_will_not_go_through_a_symlink() {
+        let d = tempfile::tempdir().unwrap();
+        fs::write(d.path().join("prd.md"), "spec").unwrap();
+        fs::create_dir(d.path().join("app")).unwrap();
+        std::os::unix::fs::symlink("../prd.md", d.path().join("app/index.html")).unwrap();
+        let ws = Workspace::new(d.path(), &["app/index.html".to_string()]).unwrap();
+        let r = run(&ws, "write_file", json!({"path":"app/index.html","content":"x"}));
+        assert!(!r.ok && r.output.contains("symbolic link"));
+        assert_eq!(fs::read_to_string(d.path().join("prd.md")).unwrap(), "spec");
     }
 
     #[test]

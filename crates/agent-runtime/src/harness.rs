@@ -110,7 +110,15 @@ impl TaskRuntime for Harness {
             if left.is_zero() {
                 break Some(StopReason::TimedOut);
             }
-            let reply = self.chat.chat(&messages, &tools, task.model.as_deref(), left)?;
+            let reply = match self.chat.chat(&messages, &tools, task.model.as_deref(), left) {
+                Ok(r) => r,
+                Err(RuntimeError::TimedOut { .. }) => break Some(StopReason::TimedOut),
+                Err(_) if Instant::now() >= deadline => break Some(StopReason::TimedOut),
+                Err(e) => {
+                    record.line(json!({"type": "error", "detail": e.to_string()}));
+                    return Err(e);
+                }
+            };
             record.line(json!({"type": "reply", "text": reply.text,
                 "toolCalls": reply.tool_calls.iter().map(|c| json!({"id": c.id, "name": c.name, "arguments": c.arguments})).collect::<Vec<_>>()}));
             if !reply.text.is_empty() {
@@ -277,6 +285,58 @@ mod tests {
         assert!(r.sent.is_empty());
         let o = r.outcome.unwrap();
         assert_eq!((o.stopped, o.steps), (Some(StopReason::Cancelled), 0));
+    }
+
+    struct Broken(fn() -> RuntimeError, std::sync::atomic::AtomicU32);
+    impl ChatModel for Broken {
+        fn chat(&self, _m: &[Value], _t: &Value, _model: Option<&str>, _d: Duration) -> Result<ChatReply, RuntimeError> {
+            self.1.fetch_add(1, Ordering::Relaxed);
+            Err((self.0)())
+        }
+    }
+
+    fn run_broken(err: fn() -> RuntimeError, timeout: Duration) -> (Result<TaskOutcome, RuntimeError>, Vec<Value>, u32) {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let model = std::sync::Arc::new(Broken(err, 0.into()));
+        struct W(std::sync::Arc<Broken>);
+        impl ChatModel for W {
+            fn chat(&self, m: &[Value], t: &Value, model: Option<&str>, d: Duration) -> Result<ChatReply, RuntimeError> {
+                self.0.chat(m, t, model, d)
+            }
+        }
+        let h = Harness { chat: Box::new(W(model.clone())), tools: vec![], hooks: vec![] };
+        let task = Task {
+            system: "S".into(), prompt: "p".into(), model: None, work_dir: root.clone(),
+            write_paths: vec![], max_steps: 5, timeout, record: Some(root.join("runs/run.jsonl")),
+        };
+        let out = h.run_task(&task, &AtomicBool::new(false), &|_| {});
+        let text = fs::read_to_string(root.join("runs/run.jsonl")).unwrap();
+        let lines = text.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+        (out, lines, model.1.load(Ordering::Relaxed))
+    }
+
+    #[test]
+    fn a_timeout_inside_the_model_call_stops_the_run() {
+        let (out, lines, _) = run_broken(|| RuntimeError::TimedOut { harness: NAME, seconds: 1 }, Duration::from_secs(60));
+        assert_eq!(out.unwrap().stopped, Some(StopReason::TimedOut));
+        assert_eq!(lines.last().unwrap()["type"], "outcome");
+    }
+
+    #[test]
+    fn other_model_errors_are_recorded_and_fail() {
+        let (out, lines, _) = run_broken(|| RuntimeError::Failed { harness: NAME, detail: "boom".into() }, Duration::from_secs(60));
+        assert!(out.is_err());
+        let last = lines.last().unwrap();
+        assert_eq!(last["type"], "error");
+        assert!(last["detail"].as_str().unwrap().contains("boom"));
+    }
+
+    #[test]
+    fn zero_timeout_never_calls_the_model() {
+        let (out, _, calls) = run_broken(|| RuntimeError::Failed { harness: NAME, detail: "x".into() }, Duration::ZERO);
+        assert_eq!(out.unwrap().stopped, Some(StopReason::TimedOut));
+        assert_eq!(calls, 0);
     }
 
     #[test]

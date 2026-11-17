@@ -14,7 +14,7 @@
 # write_paths        : the only paths the agent may write. "*" = the whole project.
 # shell              : whether the agent may run commands.
 # tools, hooks       : the most the agent may use. Settings can only switch off or lower.
-# max_steps          : the most model turns in one run. Settings can only lower it.
+# max_steps          : the most tool calls in one run. Settings can only lower it.
 # timeout_minutes    : the longest one run may take. Settings can only lower it.
 # status             : "ready" = the product skill exists in this library, "pending" = not yet.
 

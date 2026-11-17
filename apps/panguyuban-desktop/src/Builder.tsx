@@ -107,7 +107,20 @@ const SETUP_STEP_MS = 700;
 
 /** Prototypes kept on this machine, with the one being worked on. */
 export function useBuilder(enabled = true) {
-  const [projects, setProjects, loaded, loadError] = usePersisted<Project[]>("builder", LEGACY_STORE_KEY, parseProjects, []);
+  const interrupted = useRef<string[]>([]);
+  const [projects, setProjects, loaded, loadError] = usePersisted<Project[]>(
+    "builder",
+    LEGACY_STORE_KEY,
+    (raw) => {
+      try {
+        interrupted.current = (JSON.parse(raw) as Project[]).filter((p) => p.buildRun).map((p) => p.id);
+      } catch {
+        /* parseProjects reports the unreadable value */
+      }
+      return parseProjects(raw);
+    },
+    []
+  );
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
   const [harnesses, setHarnesses] = useState<HarnessStatus[]>([]);
@@ -120,6 +133,14 @@ export function useBuilder(enabled = true) {
 
   useEffect(() => {
     if (loaded) setSelectedId((id) => id ?? projects[0]?.id ?? null);
+  }, [loaded]);
+
+  // A run saved mid-build was cleared on load, but Rust may still be running it: stop it.
+  const stopped = useRef(false);
+  useEffect(() => {
+    if (!loaded || stopped.current) return;
+    stopped.current = true;
+    for (const p of interrupted.current) void builderStopBuild(p).catch(() => false);
   }, [loaded]);
 
   useEffect(() => {
@@ -1331,13 +1352,15 @@ function StoryRow(props: {
 
 function PreviewTab({ project }: { project: Project }) {
   const shown = project.stories.filter((s) => s.status !== "todo");
-  const app = project.stage === "build" ? project.appHtml ?? null : null;
+  const app = project.stage === "build" || project.stage === "handover" || project.built ? project.appHtml ?? null : null;
   if (app ?? project.designHtml) {
     return (
       <>
         <span className="field-help">
           {project.stage === "prototype"
             ? "Your prototype. It works on made-up data and resets when reopened. Try each step, then tick it in the Steps tab."
+            : app
+            ? "The app as built so far. It is one file that opens in any browser."
             : "The prototype the client was shown. It is one file that opens in any browser."}
           {project.designPath ? ` Saved to ${project.designPath}` : ""}
         </span>

@@ -49,6 +49,15 @@ const finished = () =>
   assert.equal(p.agentError, "Stopped after too many steps.");
 }
 
+// a_stopped_run_keeps_the_file_it_left_in_the_preview
+{
+  const p = applyStoryBuild(startStoryBuild(live(), "provider-x"), { message: "", stopped: "timedOut", html: "<p>half</p>" });
+  assert.equal(p.appHtml, "<p>half</p>");
+  assert.equal(s1(p).status, "todo");
+  const q = applyStoryBuild(startStoryBuild({ ...live(), appHtml: "<p>old</p>" }, "provider-x"), { message: "", stopped: "timedOut", html: null });
+  assert.equal(q.appHtml, "<p>old</p>");
+}
+
 // real_builds_confirm_without_checks_and_cannot_undo
 {
   let p = finished();

@@ -1119,7 +1119,7 @@ export function applyStoryBuild(p: Project, r: { message: string; stopped: strin
   const run = p.buildRun;
   if (!run || !ours(p, runId)) return p;
   if (r.stopped !== null) {
-    return { ...p, buildRun: null, agentError: STOPPED[r.stopped] ?? "Stopped." };
+    return { ...p, buildRun: null, appHtml: r.html ?? p.appHtml, agentError: STOPPED[r.stopped] ?? "Stopped." };
   }
   const agent = agentById(run.agentId);
   let next: Project = {

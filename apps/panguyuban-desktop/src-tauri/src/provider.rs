@@ -215,7 +215,12 @@ impl AgentRuntime for OpenAiCompatRuntime {
 impl ChatModel for OpenAiCompatRuntime {
     fn chat(&self, messages: &[Value], tools: &Value, model: Option<&str>, timeout: Duration) -> Result<ChatReply, RuntimeError> {
         let model = require_model(model)?;
-        let (status, body) = self.post_chat(json!({ "model": model, "messages": messages, "tools": tools }), timeout)?;
+        let mut payload = json!({ "model": model, "messages": messages, "tools": tools });
+        // Some APIs reject an empty tools list with a 400 about tools.
+        if tools.as_array().is_some_and(|t| t.is_empty()) {
+            payload.as_object_mut().unwrap().remove("tools");
+        }
+        let (status, body) = self.post_chat(payload, timeout)?;
         if !status.is_success() {
             if matches!(status.as_u16(), 400 | 404 | 422) && body.to_lowercase().contains("tool") {
                 return Err(failed("This model or provider does not support tools; pick another model".into()));
@@ -273,7 +278,6 @@ fn saved_runtime(store: &SqliteStore, id: &str) -> Result<OpenAiCompatRuntime, S
 }
 
 /// The tool-calling runtime for a task: only saved providers can drive it.
-// Called by the build command in the next task.
 pub fn task_runtime_for(store: &SqliteStore, harness: &str, label: &str, effective: &Effective) -> Result<Box<dyn TaskRuntime>, String> {
     let Some(id) = harness.strip_prefix(HARNESS_PREFIX) else {
         return Err(unsupported(label));
