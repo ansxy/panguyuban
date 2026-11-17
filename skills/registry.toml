@@ -45,7 +45,7 @@ tools              = ["read_file", "list_files", "search", "write_file", "edit_f
 hooks              = ["no_external_urls"]
 max_steps          = 40
 timeout_minutes    = 15
-status             = "pending"
+status             = "ready"
 
 [[session_type]]
 id                 = "change-request"

@@ -733,6 +733,29 @@ async fn builder_design(
         .map_err(|e| e.to_string())?
 }
 
+/// Builds one PRD step with the harness, streaming progress over `on_event`.
+#[tauri::command]
+async fn builder_build_story(
+    state: tauri::State<'_, DesktopController>,
+    args: builder::BuildStoryArgs,
+    on_event: tauri::ipc::Channel<agent_runtime::TaskEvent>,
+) -> Result<builder::BuildStoryResult, String> {
+    let store = state.store.clone();
+    tokio::task::spawn_blocking(move || {
+        // A closed window must not stop the run, so a failed send is ignored.
+        builder::run_build_story(&store, args, &|e| {
+            let _ = on_event.send(e);
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+fn builder_stop_build(project_id: String) -> bool {
+    builder::stop_build(&project_id)
+}
+
 /// Overwrites a prototype's prd.md, used when the user approves the PRD.
 #[tauri::command]
 fn builder_save_prd(args: builder::SavePrdArgs) -> Result<String, String> {
@@ -950,6 +973,8 @@ pub fn run() {
             builder_plan,
             builder_review_step,
             builder_design,
+            builder_build_story,
+            builder_stop_build,
             builder_save_prd,
             term_open,
             term_read,

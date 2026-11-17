@@ -1,10 +1,13 @@
 //! Guided builder commands: which agents are installed, and one interview turn.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Command;
-use std::sync::{Mutex, OnceLock};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use agent_runtime::{
+    build_prompt, build_system_prompt, effective, session_type, HarnessSettings, StopReason, Task, TaskEvent,
     design_turn, interview_turn, plan_turn, runtime_for, DesignRequest, InterviewRequest, Plan, ReviewRole, RoleReview, Turn, review_turn,
 };
 use panguyuban_core::storage::SqliteStore;
@@ -220,6 +223,134 @@ pub fn run_design(store: &SqliteStore, args: DesignArgs) -> Result<DesignResult,
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct BuildStoryArgs {
+    pub project_id: String,
+    pub project_name: String,
+    pub harness: String,
+    pub agent_label: String,
+    pub model: Option<String>,
+    pub prd: String,
+    pub story_id: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildStoryResult {
+    pub message: String,
+    pub steps: u32,
+    pub stopped: Option<StopReason>,
+    /// `app/index.html` after the run, whatever the outcome.
+    pub html: Option<String>,
+}
+
+static BUILDS: Mutex<Option<HashMap<String, Arc<AtomicBool>>>> = Mutex::new(None);
+
+/// Removes the project's entry when the run ends, on any path.
+struct RunGuard {
+    project_id: String,
+    flag: Arc<AtomicBool>,
+}
+
+impl std::ops::Deref for RunGuard {
+    type Target = AtomicBool;
+    fn deref(&self) -> &AtomicBool {
+        &self.flag
+    }
+}
+
+impl Drop for RunGuard {
+    fn drop(&mut self) {
+        if let Ok(mut builds) = BUILDS.lock() {
+            if let Some(map) = builds.as_mut() {
+                map.remove(&self.project_id);
+            }
+        }
+    }
+}
+
+/// `None` when a build for this project is already running.
+fn register(project_id: &str) -> Option<RunGuard> {
+    let mut builds = BUILDS.lock().ok()?;
+    let map = builds.get_or_insert_with(HashMap::new);
+    if map.contains_key(project_id) {
+        return None;
+    }
+    let flag = Arc::new(AtomicBool::new(false));
+    map.insert(project_id.to_string(), flag.clone());
+    Some(RunGuard { project_id: project_id.to_string(), flag })
+}
+
+/// Asks the running build for this project to stop; false when none runs.
+pub fn stop_build(project_id: &str) -> bool {
+    let builds = BUILDS.lock().ok();
+    match builds.as_ref().and_then(|b| b.as_ref()).and_then(|m| m.get(project_id)) {
+        Some(flag) => {
+            flag.store(true, Ordering::SeqCst);
+            true
+        }
+        None => false,
+    }
+}
+
+/// Saved Settings per session type id; missing or unreadable = the registry values apply.
+pub fn load_harness_settings(store: &SqliteStore) -> HashMap<String, HarnessSettings> {
+    store
+        .get_app_data("harness")
+        .ok()
+        .flatten()
+        .and_then(|json| serde_json::from_str(&json).ok())
+        .unwrap_or_default()
+}
+
+/// Builds one PRD step into app/index.html with the harness.
+pub fn run_build_story(
+    store: &SqliteStore,
+    args: BuildStoryArgs,
+    on_event: &dyn Fn(TaskEvent),
+) -> Result<BuildStoryResult, String> {
+    let dir = project_dir(&args.project_name, &args.project_id);
+    std::fs::create_dir_all(dir.join("app")).map_err(|e| format!("Could not create {}: {e}", dir.display()))?;
+    let app = dir.join("app").join("index.html");
+    if !app.exists() {
+        let design = dir.join("design.html");
+        if !design.exists() {
+            return Err("Approve a prototype before building".into());
+        }
+        std::fs::copy(&design, &app).map_err(|e| format!("Could not copy the prototype: {e}"))?;
+    }
+
+    let session = session_type("build-next-story").ok_or("build-next-story is not in the registry")?;
+    let settings = load_harness_settings(store);
+    let eff = effective(&session, settings.get(&session.id));
+    let runtime = crate::provider::task_runtime_for(store, &args.harness, &args.agent_label, &eff)?;
+    let prompt = build_prompt(&args.prd, &args.story_id)?;
+    let cancel = register(&args.project_id).ok_or("A step is already being built for this prototype")?;
+
+    let seconds = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let task = Task {
+        system: build_system_prompt(session.write_paths.first().map_or("app/index.html", String::as_str)),
+        prompt,
+        model: args.model,
+        work_dir: dir.clone(),
+        write_paths: session.write_paths.clone(),
+        max_steps: eff.max_steps,
+        timeout: eff.timeout,
+        record: Some(dir.join(".panguyuban").join("runs").join(format!("{}-{seconds}.jsonl", args.story_id))),
+    };
+    let outcome = runtime.run_task(&task, &cancel, on_event).map_err(|e| e.to_string())?;
+    Ok(BuildStoryResult {
+        message: outcome.message,
+        steps: outcome.steps,
+        stopped: outcome.stopped,
+        html: std::fs::read_to_string(&app).ok(),
+    })
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SavePrdArgs {
     pub project_id: String,
     pub project_name: String,
@@ -276,6 +407,17 @@ fn folder_name(name: &str, id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn one_build_per_project() {
+        let first = register("p1").expect("first");
+        assert!(register("p1").is_none());
+        assert!(stop_build("p1"));
+        assert!(!stop_build("p2"));
+        assert!(first.load(std::sync::atomic::Ordering::SeqCst));
+        drop(first);
+        assert!(register("p1").is_some());
+    }
 
     #[test]
     fn folder_names_cannot_leave_the_projects_folder() {

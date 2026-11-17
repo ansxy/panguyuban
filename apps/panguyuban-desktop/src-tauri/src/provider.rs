@@ -274,7 +274,6 @@ fn saved_runtime(store: &SqliteStore, id: &str) -> Result<OpenAiCompatRuntime, S
 
 /// The tool-calling runtime for a task: only saved providers can drive it.
 // Called by the build command in the next task.
-#[allow(dead_code)]
 pub fn task_runtime_for(store: &SqliteStore, harness: &str, label: &str, effective: &Effective) -> Result<Box<dyn TaskRuntime>, String> {
     let Some(id) = harness.strip_prefix(HARNESS_PREFIX) else {
         return Err(unsupported(label));

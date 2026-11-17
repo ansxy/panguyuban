@@ -8,6 +8,7 @@
 //! the PRD as text and the app saves the file.
 
 mod antigravity;
+mod build;
 mod claude;
 mod harness;
 mod hooks;
@@ -23,6 +24,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 pub use antigravity::AntigravityRuntime;
+pub use build::*;
 pub use claude::ClaudeRuntime;
 pub use harness::*;
 pub use hooks::*;
