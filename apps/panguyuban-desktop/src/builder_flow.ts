@@ -170,7 +170,7 @@ export interface Project {
   log: LogEntry[];
   handover: string | null;
   /** A real build in progress: the step it is on, the agent running it and the lines so far. */
-  buildRun: { storyId: string; agentId: string; steps: string[] } | null;
+  buildRun: { storyId: string; agentId: string; steps: string[]; runId: string } | null;
   /** The app/index.html the agent built, once a real build finished. */
   appHtml: string | null;
 }
@@ -1098,13 +1098,16 @@ export function realBuild(p: Project, story: Story): { agent: AgentDef } | { blo
     : { blocked: `Building with ${agent.label} is not supported yet; pick a provider agent` };
 }
 
-export function startStoryBuild(p: Project, agentId: string): Project {
+export function startStoryBuild(p: Project, agentId: string, runId = String(now())): Project {
   const story = currentStory(p);
-  return { ...p, agentError: null, buildRun: { storyId: story?.id ?? "", agentId, steps: [] } };
+  return { ...p, agentError: null, buildRun: { storyId: story?.id ?? "", agentId, steps: [], runId } };
 }
 
-export function addBuildStep(p: Project, line: string): Project {
-  return p.buildRun ? { ...p, buildRun: { ...p.buildRun, steps: [...p.buildRun.steps, line] } } : p;
+/** An update belongs to a run when no id is given or the ids match; others must not touch it. */
+const ours = (p: Project, runId?: string) => !!p.buildRun && (runId === undefined || p.buildRun.runId === runId);
+
+export function addBuildStep(p: Project, line: string, runId?: string): Project {
+  return p.buildRun && ours(p, runId) ? { ...p, buildRun: { ...p.buildRun, steps: [...p.buildRun.steps, line] } } : p;
 }
 
 const STOPPED: Record<string, string> = {
@@ -1112,9 +1115,9 @@ const STOPPED: Record<string, string> = {
   timedOut: "Stopped: it took too long.",
 };
 
-export function applyStoryBuild(p: Project, r: { message: string; stopped: string | null; html: string | null }): Project {
+export function applyStoryBuild(p: Project, r: { message: string; stopped: string | null; html: string | null }, runId?: string): Project {
   const run = p.buildRun;
-  if (!run) return p;
+  if (!run || !ours(p, runId)) return p;
   if (r.stopped !== null) {
     return { ...p, buildRun: null, agentError: STOPPED[r.stopped] ?? "Stopped." };
   }
@@ -1131,7 +1134,8 @@ export function applyStoryBuild(p: Project, r: { message: string; stopped: strin
   return say(next, "agent", `${r.message} Look at the preview and tick each line that is true.`);
 }
 
-export function storyBuildFailed(p: Project, error: string): Project {
+export function storyBuildFailed(p: Project, error: string, runId?: string): Project {
+  if (p.buildRun && !ours(p, runId)) return p; // a refused second build must not wipe the live run
   return { ...p, buildRun: null, agentError: error.trim() || "The agent did not answer." };
 }
 
@@ -1366,13 +1370,16 @@ export function parseProjects(raw: string): Project[] {
       interviewAgent: p.interviewAgent ?? null,
       prdText: p.prdText ?? null,
       prdPath: p.prdPath ?? null,
-      agentError: p.agentError ?? null,
       planned: p.planned ?? (p.prdApproved ? "rules" : "no"),
       designHtml: p.designHtml ?? null,
       designPath: p.designPath ?? null,
       designChanges: p.designChanges ?? [],
       designPending: p.designPending ?? false,
       designStatus: p.designStatus ?? "no",
+      appHtml: p.appHtml ?? null,
+      // The run's channel died with the window; nothing will ever finish it.
+      buildRun: null,
+      agentError: p.buildRun ? "The build was interrupted. Try again." : p.agentError ?? null,
       teamReview: p.teamReview ? interrupt(p.teamReview, Date.now()) : null,
       building: p.building ?? false,
       built: p.built ?? false,

@@ -914,10 +914,11 @@ function primaryAction(p: Project): PrimaryAction | null {
         const real = realBuild(p, story);
         if (real && "blocked" in real) return { label: `Build ${story.id}`, blocked: real.blocked };
         if (real && !(story.needsEngineer && !story.engineerCleared)) {
+          const runId = String(Date.now());
           return {
             label: `Build ${story.id}`,
-            run: (q) => startStoryBuild(q, real.agent.id),
-            then: (b, q) => runStoryBuild(b, q, real.agent, story.id),
+            run: (q) => startStoryBuild(q, real.agent.id, runId),
+            then: (b, q) => runStoryBuild(b, q, real.agent, story.id, runId),
           };
         }
         return story.needsEngineer && !story.engineerCleared
@@ -941,7 +942,7 @@ function primaryAction(p: Project): PrimaryAction | null {
 }
 
 /** Runs the harness for one step; every result lands through updateById so leaving the project is safe. */
-function runStoryBuild(builder: Builder, p: Project, agent: AgentDef, storyId: string) {
+function runStoryBuild(builder: Builder, p: Project, agent: AgentDef, storyId: string, runId: string) {
   const id = p.id;
   builderBuildStory(
     {
@@ -955,11 +956,11 @@ function runStoryBuild(builder: Builder, p: Project, agent: AgentDef, storyId: s
     },
     (e) =>
       builder.updateById(id, (q) =>
-        addBuildStep(q, e.kind === "step" ? `${e.ok ? "" : "✗ "}${e.summary}` : e.text)
+        addBuildStep(q, e.kind === "step" ? `${e.ok ? "" : "✗ "}${e.summary}` : e.text, runId)
       )
   )
-    .then((r) => builder.updateById(id, (q) => applyStoryBuild(q, r)))
-    .catch((err) => builder.updateById(id, (q) => storyBuildFailed(q, String(err))));
+    .then((r) => builder.updateById(id, (q) => applyStoryBuild(q, r, runId)))
+    .catch((err) => builder.updateById(id, (q) => storyBuildFailed(q, String(err), runId)));
 }
 
 function InspectorPane({ builder, project }: { builder: Builder; project: Project }) {

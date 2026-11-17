@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import {
   createProject, setProviderAgents, realBuild, startStoryBuild, addBuildStep,
-  applyStoryBuild, canConfirmStory, confirmStory, canUndo, toggleCriterion,
+  applyStoryBuild, storyBuildFailed, parseProjects, canConfirmStory, confirmStory, canUndo, toggleCriterion,
 } from "./builder_flow.ts";
 
 setProviderAgents([{ id: "x", name: "Local" }]);
@@ -65,6 +65,23 @@ const finished = () =>
   let p = startStoryBuild(live(), "provider-x");
   p = addBuildStep(addBuildStep(p, "read prd.md"), "edited app/index.html");
   assert.deepEqual(p.buildRun.steps, ["read prd.md", "edited app/index.html"]);
+}
+
+// a_failure_only_clears_its_own_run
+{
+  const p = startStoryBuild(live(), "provider-x", "run-a");
+  assert.equal(storyBuildFailed(p, "x", "other-run").buildRun.runId, "run-a");
+  assert.equal(addBuildStep(p, "nope", "other-run").buildRun.steps.length, 0);
+  assert.equal(applyStoryBuild(p, { message: "m", stopped: null, html: "h" }, "other-run").appHtml, null);
+  assert.equal(storyBuildFailed(p, "x", "run-a").buildRun, null);
+}
+
+// a_run_saved_mid_build_is_cleared_on_reload
+{
+  const [q] = parseProjects(JSON.stringify([startStoryBuild(live(), "provider-x", "run-a")]));
+  assert.equal(q.buildRun, null);
+  assert.equal(q.agentError, "The build was interrupted. Try again.");
+  assert.equal(s1(q).status, "todo");
 }
 
 console.log("build_run: ok");
