@@ -14,7 +14,11 @@ Built with Tauri 2 (Rust) and React.
 | **Tickets** | Your Plane.so tickets, with description, linked PR and **Checkout branch**. |
 | **Pull requests** | GitHub PRs to review, yours, and ready to merge, with CI state, diff, approve and merge (which also closes the linked ticket). |
 | **Agents** | Live Claude Code and Antigravity sessions on this Mac: who is working, who needs you, token usage. |
-| **Prototypes** | Guided builder: an agent interviews you, writes a PRD, builds an HTML prototype, then hands it to engineering or builds it. |
+| **Prototypes** | Guided builder: an agent interviews you, writes a PRD, builds an HTML prototype, then hands it to engineering or builds it here, one step at a time, with Panguyuban's own agent and any provider saved in Settings. |
+
+**Settings → Agent harness** sets what Panguyuban's agent may do: which tools and checks
+are on, and the step and time limits. The skill library sets the most it may do; Settings
+can only switch things off or lower the limits.
 
 Meetings come from the macOS **Calendar** app (any account it syncs: Google Workspace,
 Exchange, iCloud) and, on any system, from a calendar's private **iCal link** or an
@@ -49,7 +53,11 @@ Windows too, but those are not tested yet, and a few parts are macOS-only today:
   - **Meetings:** your calendar's private iCal link (Google Calendar: Settings → your calendar →
     Secret address in iCal format; Outlook: Publish calendar → ICS link), or on macOS your
     work calendar added to the Calendar app (System Settings → Internet Accounts)
-  - **Agents / Prototypes:** [Claude Code](https://claude.com/claude-code) (`claude`) or Antigravity (`agy`) on your `PATH`
+  - **Agents:** [Claude Code](https://claude.com/claude-code) (`claude`) or Antigravity (`agy`) on your `PATH`
+  - **Prototypes and `pangu`:** `claude` or `agy` on your `PATH`, or an OpenAI-compatible
+    provider (OpenRouter, a Claude API key, a local server) added in Settings → Providers.
+    Building a prototype step by step and the `pangu` agent need a provider whose model
+    supports tool calling.
 
 ## Install
 
@@ -91,9 +99,12 @@ The first build compiles all the Rust dependencies and takes a few minutes.
 - Settings and synced tickets / PRs: `state.db` in the `panguyuban` folder of your local
   app data (macOS `~/Library/Application Support`, Linux `~/.local/share`,
   Windows `%LOCALAPPDATA%`)
-- Tokens and the iCal link: the system keychain, service `com.ansar.panguyuban`
+- Tokens, provider keys and the iCal link: the system keychain, service `com.ansar.panguyuban`
 - An imported `.ics` file: a copy next to `state.db`
-- Prototypes and their PRDs: `Panguyuban` in your Documents folder
+- Prototypes and their PRDs: `Panguyuban` in your Documents folder. A prototype built step
+  by step lives in its `app/index.html`, with a record of every agent run in
+  `.panguyuban/runs/`
+- `pangu` run records: `runs/` next to `state.db`
 - Window layout and per-ticket project picks: the app's local storage
 
 ## Install with an agent
@@ -150,13 +161,22 @@ links the copy inside the app into `/opt/homebrew/bin` or `/usr/local/bin`.
 - `pangu claude [args]` starts Claude Code with Panguyuban's skills and guard rails. The
   guard rails block writes outside the folder or into `.git`, tools switched off in
   Settings → Agent harness, and writes or commands past the step limit. Everything else
-  is left to Claude Code.
+  is left to Claude Code. Shell commands are not checked: a command you allow in Claude
+  Code's own prompt can still write anywhere.
 
 On macOS the first `pangu` run asks for access to the provider key in the keychain.
 Choose **Always Allow** so it does not ask again.
 
 Each run is recorded, one JSON line per step, in `runs/<folder>/<session>.jsonl` next to
 `state.db`.
+
+Planned:
+
+- `pangu agy` and `pangu hermes`: the same skills and guard rails for Antigravity and Hermes.
+- Checking shell commands in `pangu claude` through Claude Code's command sandbox.
+- Masking personal identifiers (ID, member and card numbers, phone numbers, emails) before
+  anything reaches the model, and putting the real values back when the agent writes a
+  file or runs a query.
 
 ## Development
 
@@ -171,6 +191,10 @@ cargo test             # Rust tests (from the repository root)
 Outside the desktop app (the browser preview) every backend call falls back to demo
 data, so the UI can be worked on without Plane, GitHub or a calendar.
 
+`npm run desktop` and `npm run desktop:build` build `pangu` first
+(`scripts/build-pangu.sh`) so the app can bundle it. A plain `cargo build` uses a
+placeholder in its place.
+
 ## Repository layout
 
 ```
@@ -181,8 +205,12 @@ crates/
   panguyuban-core/     models, provider traits, SQLite store, workflows
   provider-plane/      Plane.so adapter
   provider-github/     GitHub adapter
-  agent-runtime/       runs Claude Code / Antigravity one turn at a time
-skills/                skill library the guided builder's agents follow
+  agent-runtime/       the agent harness (loop, tools, checks, policy) and the Claude Code /
+                       Antigravity runners
+  provider-openai/     OpenAI-compatible provider shared by the app and pangu
+  pangu-cli/           the pangu terminal command
+skills/                skill library the agents follow, and the registry of what each may do
+scripts/               build helpers (build-pangu.sh)
 docs/                  design specs and plans
 ```
 
