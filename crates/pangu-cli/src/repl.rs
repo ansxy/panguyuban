@@ -55,19 +55,21 @@ fn skill_body(raw: &str) -> &str {
 
 const WORK_ON_PROJECT: &str = include_str!("../../../skills/product/work-on-project/SKILL.md");
 // ponytail: add a line here when a skill lands under skills/engineering/
-const ENGINEERING: &[&str] = &[include_str!("../../../skills/engineering/endpoint-requests/SKILL.md")];
+const ENGINEERING: &[(&str, &str)] =
+    &[("endpoint-requests", include_str!("../../../skills/engineering/endpoint-requests/SKILL.md"))];
 
-pub fn system_prompt(root: &Path) -> String {
+pub fn system_prompt(root: &Path, tools: &[String]) -> String {
     let mut out = skill_body(WORK_ON_PROJECT).to_string();
-    for s in ENGINEERING {
+    for (_, s) in ENGINEERING {
         out.push_str("\n\n");
         out.push_str(skill_body(s));
     }
     out.push_str(&format!(
-        "\n\n## How this session runs\n\nYou work in the folder {}. Use the tools you are given to read, search and change files there. \
+        "\n\n## How this session runs\n\nYou work in the folder {}. Your tools: {}. Use them to read, search and change files there. \
          Commands you run with run_command ask the user first, so keep them few and say what each is for. \
          Never touch the .git folder; it is off limits.\n",
-        root.display()
+        root.display(),
+        tools.join(", ")
     ));
     out
 }
@@ -118,8 +120,8 @@ fn setup(args: &[String]) -> Result<(Session, Choice, Harness, Task), String> {
     if eff.tools.iter().any(|t| t == "run_command") {
         let root = session.root.clone();
         let remember = move |cmd: &str| {
-            if let Ok(st) = session::open_store() {
-                let _ = session::remember_command(&st, &root, cmd);
+            if let Err(e) = session::open_store().and_then(|st| session::remember_command(&st, &root, cmd)) {
+                eprintln!("Could not remember \"{cmd}\" for this folder: {e}");
             }
         };
         tools.push(Box::new(RunCommand::new(
@@ -132,7 +134,7 @@ fn setup(args: &[String]) -> Result<(Session, Choice, Harness, Task), String> {
     let chat = OpenAiCompat { base_url: choice.provider.base_url.clone(), api_key: provider_key(&choice.provider.id)? };
     let harness = Harness { chat: Box::new(chat), tools, hooks: hooks_named(&eff.hooks) };
     let task = Task {
-        system: system_prompt(&session.root),
+        system: system_prompt(&session.root, &eff.tools),
         prompt: String::new(),
         model: Some(choice.model.clone()),
         work_dir: session.root.clone(),
@@ -190,11 +192,11 @@ pub fn run(args: &[String]) -> i32 {
                     Some(StopReason::Cancelled) => println!("Stopped: cancelled"),
                     None => println!("{}", out.message),
                 }
-                if !saved {
-                    saved = true;
-                    if let Ok(st) = session::open_store() {
-                        let v = serde_json::json!({"provider": choice.provider.id, "model": choice.model});
-                        let _ = st.set_app_data("pangu", &v.to_string());
+                if !saved && out.stopped.is_none() {
+                    let v = serde_json::json!({"provider": choice.provider.id, "model": choice.model});
+                    match session::open_store().and_then(|st| st.set_app_data("pangu", &v.to_string()).map_err(|e| e.to_string())) {
+                        Ok(()) => saved = true,
+                        Err(e) => eprintln!("Could not remember this provider and model: {e}"),
                     }
                 }
             }
@@ -242,8 +244,25 @@ mod tests {
 
     #[test]
     fn the_prompt_names_the_folder_and_rules() {
-        let s = system_prompt(Path::new("/tmp/orders-api"));
+        let tools: Vec<String> = ["read_file", "run_command"].map(String::from).into();
+        let s = system_prompt(Path::new("/tmp/orders-api"), &tools);
+        assert!(s.contains("read_file, run_command") && s.contains("ask the user first"));
         assert!(s.contains("/tmp/orders-api") && s.contains(".git") && s.contains("## How this session runs"));
         assert!(!s.contains("---\nname:"));
+    }
+
+    #[test]
+    fn every_engineering_skill_is_compiled_in() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../skills/engineering");
+        let mut on_disk: Vec<String> = std::fs::read_dir(dir)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.path().join("SKILL.md").is_file())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        on_disk.sort();
+        let mut listed: Vec<&str> = ENGINEERING.iter().map(|(n, _)| *n).collect();
+        listed.sort();
+        assert_eq!(on_disk, listed);
     }
 }
