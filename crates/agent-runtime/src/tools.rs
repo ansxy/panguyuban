@@ -118,6 +118,16 @@ fn skipped(name: &std::ffi::OsStr) -> bool {
     SKIPPED_DIRS.iter().any(|d| name == *d)
 }
 
+/// Files under `start`, skipping tool folders. Links are not followed, so a symlink
+/// inside the folder can neither be walked into nor lead out.
+fn walk_files(start: &Path) -> impl Iterator<Item = walkdir::DirEntry> {
+    walkdir::WalkDir::new(start)
+        .into_iter()
+        .filter_entry(|e| e.depth() == 0 || !skipped(e.file_name()))
+        .flatten()
+        .filter(|e| e.file_type().is_file())
+}
+
 pub struct ReadFile;
 pub struct ListFiles;
 pub struct Search;
@@ -158,16 +168,14 @@ impl Tool for ListFiles {
         if Path::new(pattern).is_absolute() || pattern.contains("..") {
             return ToolResult::refused(format!("refused list {pattern}"), "pattern must be relative and without ..");
         }
-        let full = format!("{}/{pattern}", glob::Pattern::escape(&ws.root.to_string_lossy()));
-        let hits = match glob::glob(&full) {
-            Ok(h) => h,
+        let pat = match glob::Pattern::new(pattern) {
+            Ok(p) => p,
             Err(e) => return ToolResult::refused(format!("refused list {pattern}"), format!("bad pattern: {e}")),
         };
-        let mut files: Vec<String> = hits
-            .flatten()
-            .filter(|p| p.is_file())
-            .map(|p| ws.rel(&p))
-            .filter(|r| !Path::new(r).iter().any(skipped) && ws.resolve(r).is_ok())
+        let opts = glob::MatchOptions { require_literal_separator: true, ..Default::default() };
+        let mut files: Vec<String> = walk_files(&ws.root)
+            .map(|e| ws.rel(e.path()))
+            .filter(|r| pat.matches_with(r, opts) && ws.resolve(r).is_ok())
             .collect();
         files.sort();
         ToolResult::ok(format!("listed {pattern} ({} files)", files.len()), files.join("\n"))
@@ -199,9 +207,7 @@ impl Tool for Search {
             None => ws.root.clone(),
         };
         let mut found = Vec::new();
-        // Links are not followed, so a symlink inside the folder cannot lead out.
-        let walk = walkdir::WalkDir::new(&start).into_iter().filter_entry(|e| e.depth() == 0 || !skipped(e.file_name()));
-        'files: for entry in walk.flatten().filter(|e| e.file_type().is_file()) {
+        'files: for entry in walk_files(&start) {
             let Ok(content) = std::fs::read_to_string(entry.path()) else { continue };
             for (i, line) in content.lines().enumerate().filter(|(_, l)| l.contains(text)) {
                 found.push(format!("{}:{}: {}", ws.rel(entry.path()), i + 1, line.trim()));
@@ -423,6 +429,20 @@ mod tests {
         assert_eq!(r.summary, "searched \"total\" (1 matches)");
         assert!(!run(&ws, "list_files", json!({"pattern":"../*"})).ok);
         assert!(!run(&ws, "list_files", json!({"pattern":"/etc/*"})).ok);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn list_does_not_walk_through_symlinks() {
+        let (d, ws) = setup();
+        let other = tempfile::tempdir().unwrap();
+        fs::write(other.path().join("a.txt"), "secret").unwrap();
+        std::os::unix::fs::symlink(other.path(), d.path().join("out")).unwrap();
+        std::os::unix::fs::symlink(".", d.path().join("loop")).unwrap();
+        let r = run(&ws, "list_files", json!({"pattern":"**/*"}));
+        assert!(r.ok);
+        assert!(r.output.contains("app/index.html"));
+        assert!(!r.output.contains("out/a.txt") && !r.output.contains("loop"));
     }
 
     #[test]
