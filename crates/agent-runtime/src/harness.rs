@@ -97,6 +97,13 @@ impl Conversation {
     }
 }
 
+/// Removes a trailing user prompt the model never answered, so the next turn does not send two in a row.
+fn drop_unanswered(messages: &mut Vec<Value>) {
+    if messages.last().is_some_and(|m| m["role"] == "user") {
+        messages.pop();
+    }
+}
+
 impl TaskRuntime for Harness {
     fn harness(&self) -> &'static str {
         NAME
@@ -140,6 +147,7 @@ impl Harness {
                 Err(_) if Instant::now() >= deadline => break Some(StopReason::TimedOut),
                 Err(e) => {
                     record.line(json!({"type": "error", "detail": e.to_string()}));
+                    drop_unanswered(messages);
                     return Err(e);
                 }
             };
@@ -183,6 +191,7 @@ impl Harness {
             }
         };
 
+        drop_unanswered(messages);
         let outcome = TaskOutcome { message: last_text, steps, stopped };
         record.line(json!({"type": "outcome", "message": outcome.message, "steps": outcome.steps, "stopped": outcome.stopped}));
         Ok(outcome)
@@ -469,5 +478,30 @@ mod tests {
         let sent = script.1.lock().unwrap().clone();
         let roles: Vec<_> = sent[1].iter().map(|m| (m["role"].as_str().unwrap(), m["content"].as_str().unwrap())).collect();
         assert_eq!(roles, vec![("system", "SYSTEM"), ("user", "one"), ("assistant", "Hi"), ("user", "two")]);
+    }
+
+    #[test]
+    fn a_failed_chat_drops_the_unanswered_prompt() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = std::sync::Arc::new(Scripted(Mutex::new(VecDeque::new()), Mutex::new(vec![]), Mutex::new(vec![])));
+        let h = Harness { chat: Box::new(Shared(script.clone())), tools: vec![], hooks: vec![] };
+        let mut task = Task {
+            system: "SYSTEM".into(),
+            prompt: "one".into(),
+            model: None,
+            work_dir: dir.path().to_path_buf(),
+            write_paths: vec![],
+            max_steps: 5,
+            timeout: Duration::from_secs(60),
+            record: None,
+        };
+        let mut conv = Conversation::new();
+        assert!(h.run_turn(&task, &mut conv, &AtomicBool::new(false), &|_| {}).is_err());
+        script.0.lock().unwrap().push_back(say("Hi"));
+        task.prompt = "two".into();
+        h.run_turn(&task, &mut conv, &AtomicBool::new(false), &|_| {}).unwrap();
+        let sent = script.1.lock().unwrap().clone();
+        let roles: Vec<_> = sent[1].iter().map(|m| (m["role"].as_str().unwrap(), m["content"].as_str().unwrap())).collect();
+        assert_eq!(roles, vec![("system", "SYSTEM"), ("user", "two")]);
     }
 }
