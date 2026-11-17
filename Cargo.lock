@@ -2471,6 +2471,7 @@ version = "0.1.0"
 dependencies = [
  "agent-runtime",
  "dirs 5.0.1",
+ "libc",
  "panguyuban-core",
  "provider-openai",
  "serde",

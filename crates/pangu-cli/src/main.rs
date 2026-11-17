@@ -1,4 +1,5 @@
 mod hook;
+mod repl;
 mod session;
 
 use std::io::Read;
@@ -76,6 +77,6 @@ fn main() {
                 }
             }
         }
-        _ => println!("pangu: not implemented yet"),
+        _ => exit(repl::run(&args)),
     }
 }

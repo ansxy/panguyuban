@@ -35,7 +35,6 @@ pub struct Session {
 }
 
 impl Session {
-    #[allow(dead_code)] // used by the launcher in Task 5
     pub fn start(root: PathBuf) -> Session {
         let secs = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -50,7 +49,7 @@ impl Session {
         session_from(get("PANGU_SESSION"), get("PANGU_ROOT"))
     }
 
-    #[allow(dead_code)] // used by the launcher in Task 5
+    #[allow(dead_code)] // used by the claude launcher
     pub fn env(&self) -> [(&'static str, String); 2] {
         [("PANGU_SESSION", self.id.clone()), ("PANGU_ROOT", self.root.to_string_lossy().into_owned())]
     }
