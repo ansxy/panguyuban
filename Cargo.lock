@@ -13,6 +13,7 @@ name = "agent-runtime"
 version = "0.1.0"
 dependencies = [
  "glob",
+ "libc",
  "serde",
  "serde_json",
  "tempfile",

@@ -1,7 +1,9 @@
 //! `run_command`: run a shell command in the project folder after an approver says yes.
 
 use std::io::Read;
+use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
+use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -9,6 +11,8 @@ use serde_json::{json, Value};
 
 use crate::tools::{definition, str_arg};
 use crate::{Tool, ToolResult, Workspace};
+
+const GRACE: Duration = Duration::from_millis(1500);
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Approval {
@@ -64,23 +68,28 @@ impl Tool for RunCommand {
         };
         let spawned = writer.try_clone().and_then(|w2| {
             Command::new("sh").arg("-c").arg(cmd).current_dir(ws.root())
-                .stdin(Stdio::null()).stdout(writer).stderr(w2).spawn()
+                .process_group(0).stdin(Stdio::null()).stdout(writer).stderr(w2).spawn()
         });
         let mut child = match spawned {
             Ok(c) => c,
             Err(e) => return ToolResult::refused(format!("could not run `{cmd}`"), e.to_string()),
         };
-        let reading = std::thread::spawn(move || {
-            let mut buf = Vec::new();
-            let _ = reader.read_to_end(&mut buf);
-            String::from_utf8_lossy(&buf).into_owned()
+        let (tx, rx) = mpsc::channel::<Vec<u8>>();
+        std::thread::spawn(move || {
+            let mut chunk = [0u8; 4096];
+            while let Ok(n) = reader.read(&mut chunk) {
+                if n == 0 || tx.send(chunk[..n].to_vec()).is_err() {
+                    break;
+                }
+            }
         });
         let start = Instant::now();
         let code = loop {
             match child.try_wait() {
                 Ok(Some(status)) => break Some(status.code().unwrap_or(-1)),
                 Ok(None) if start.elapsed() >= self.timeout => {
-                    let _ = child.kill();
+                    // Only the timeout path kills the whole group; a background child left by a normal exit is kept.
+                    unsafe { libc::kill(-(child.id() as i32), libc::SIGKILL) };
                     let _ = child.wait();
                     break None;
                 }
@@ -88,8 +97,16 @@ impl Tool for RunCommand {
                 Err(_) => break Some(-1),
             }
         };
-        // ponytail: a grandchild holding the pipe open would block this join; fine for sh -c one-liners.
-        let out = reading.join().unwrap_or_default();
+        // Collect output until EOF, but give up after a grace period: a background child may hold the pipe open.
+        let grace = Instant::now() + GRACE;
+        let mut buf = Vec::new();
+        loop {
+            match rx.recv_timeout(grace.saturating_duration_since(Instant::now())) {
+                Ok(c) => buf.extend(c),
+                Err(RecvTimeoutError::Timeout) | Err(RecvTimeoutError::Disconnected) => break,
+            }
+        }
+        let out = String::from_utf8_lossy(&buf).into_owned();
         match code {
             Some(n) => ToolResult { ok: n == 0, summary: format!("ran `{cmd}` (exit {n})"), output: format!("exit code {n}\n{out}") },
             None => {
@@ -161,6 +178,25 @@ mod tests {
         let (t, asked, _, _d, ws) = tool(Approval::Deny, &["echo hi"], 5);
         assert!(go(&t, &ws, "echo hi").ok);
         assert_eq!(*asked.lock().unwrap(), 0);
+    }
+
+    #[test]
+    fn a_background_child_does_not_hang_the_call() {
+        let (t, _, _, _d, ws) = tool(Approval::Once, &[], 10);
+        let start = Instant::now();
+        let r = go(&t, &ws, "(sleep 5) & echo hi");
+        assert!(start.elapsed() < Duration::from_secs(4));
+        assert!(r.ok && r.output.contains("hi"));
+    }
+
+    #[test]
+    fn a_timeout_kills_background_children_too() {
+        let (t, _, _, _d, ws) = tool(Approval::Once, &[], 1);
+        let start = Instant::now();
+        let r = go(&t, &ws, "echo started; (sleep 5; echo late) & sleep 5");
+        assert!(start.elapsed() < Duration::from_secs(4));
+        assert!(!r.ok && r.output.contains("timed out after 1 s") && r.output.contains("started"));
+        assert!(!r.output.contains("late"));
     }
 
     #[test]
