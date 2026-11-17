@@ -760,3 +760,37 @@ export async function builderStopBuild(projectId: string): Promise<boolean> {
   }
   return false;
 }
+
+export interface HarnessSessionView {
+  session: {
+    id: string;
+    labelEn: string;
+    writePaths: string[];
+    tools: string[];
+    hooks: string[];
+    maxSteps: number;
+    timeoutMinutes: number;
+  };
+  tools: string[];
+  hooks: string[];
+  maxSteps: number;
+  timeoutMinutes: number;
+}
+
+export async function builderHarnessSettings(): Promise<HarnessSessionView[]> {
+  if (window.__TAURI_INTERNALS__?.invoke) {
+    return window.__TAURI_INTERNALS__.invoke<HarnessSessionView[]>("builder_harness_settings");
+  }
+  return [];
+}
+
+/** `null` resets the session to the registry values. */
+export async function builderSaveHarnessSettings(
+  sessionId: string,
+  settings: { tools: string[]; hooks: string[]; maxSteps: number; timeoutMinutes: number } | null,
+): Promise<HarnessSessionView[]> {
+  if (window.__TAURI_INTERNALS__?.invoke) {
+    return window.__TAURI_INTERNALS__.invoke<HarnessSessionView[]>("builder_save_harness_settings", { sessionId, settings });
+  }
+  return [];
+}

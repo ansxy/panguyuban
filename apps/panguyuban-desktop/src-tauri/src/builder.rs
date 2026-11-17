@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use agent_runtime::{
-    build_prompt, build_system_prompt, effective, session_type, HarnessSettings, StopReason, Task, TaskEvent,
+    build_prompt, build_system_prompt, effective, harness_sessions, session_type, SessionType, HarnessSettings, StopReason, Task, TaskEvent,
     design_turn, interview_turn, plan_turn, runtime_for, DesignRequest, InterviewRequest, Plan, ReviewRole, RoleReview, Turn, review_turn,
 };
 use panguyuban_core::storage::SqliteStore;
@@ -302,6 +302,47 @@ pub fn load_harness_settings(store: &SqliteStore) -> HashMap<String, HarnessSett
         .unwrap_or_default()
 }
 
+/// One session type with its ceiling and the choice currently in force.
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct HarnessSessionView {
+    pub session: SessionType,
+    pub tools: Vec<String>,
+    pub hooks: Vec<String>,
+    pub max_steps: u32,
+    pub timeout_minutes: u32,
+}
+
+pub fn harness_settings(store: &SqliteStore) -> Vec<HarnessSessionView> {
+    let saved = load_harness_settings(store);
+    harness_sessions()
+        .into_iter()
+        .map(|session| {
+            let e = effective(&session, saved.get(&session.id));
+            HarnessSessionView { session, tools: e.tools, hooks: e.hooks, max_steps: e.max_steps, timeout_minutes: (e.timeout.as_secs() / 60) as u32 }
+        })
+        .collect()
+}
+
+/// `None` resets. Stored as given; `effective` narrows on read.
+pub fn save_harness_settings(
+    store: &SqliteStore,
+    session_id: &str,
+    settings: Option<HarnessSettings>,
+) -> Result<Vec<HarnessSessionView>, String> {
+    if !harness_sessions().iter().any(|s| s.id == session_id) {
+        return Err(format!("{session_id} is not a session type"));
+    }
+    let mut all = load_harness_settings(store);
+    match settings {
+        Some(s) => all.insert(session_id.to_string(), s),
+        None => all.remove(session_id),
+    };
+    let json = serde_json::to_string(&all).map_err(|e| e.to_string())?;
+    store.set_app_data("harness", &json).map_err(|e| e.to_string())?;
+    Ok(harness_settings(store))
+}
+
 /// Step ids become part of the run-record file name, so only plain characters pass.
 fn check_story_id(id: &str) -> Result<(), String> {
     if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
@@ -416,6 +457,48 @@ fn folder_name(name: &str, id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn s(v: &[&str]) -> Vec<String> {
+        v.iter().map(|x| x.to_string()).collect()
+    }
+
+    #[test]
+    fn harness_settings_start_at_the_ceiling() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        let views = harness_settings(&store);
+        assert_eq!(views.len(), 1);
+        assert_eq!(views[0].session.id, "build-next-story");
+        assert_eq!(views[0].tools, s(&["read_file", "list_files", "search", "write_file", "edit_file"]));
+        assert_eq!(views[0].max_steps, 40);
+    }
+
+    #[test]
+    fn saved_settings_narrow_and_reset() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        let saved = HarnessSettings { tools: Some(s(&["read_file"])), hooks: Some(vec![]), max_steps: Some(5), timeout_minutes: Some(3) };
+        let v = save_harness_settings(&store, "build-next-story", Some(saved)).unwrap();
+        assert_eq!((v[0].tools.clone(), v[0].hooks.clone(), v[0].max_steps, v[0].timeout_minutes), (s(&["read_file"]), vec![], 5, 3));
+        assert!(load_harness_settings(&store).contains_key("build-next-story"));
+        let v = save_harness_settings(&store, "build-next-story", None).unwrap();
+        assert_eq!(v[0].tools.len(), 5);
+        assert_eq!(v[0].max_steps, 40);
+        assert!(load_harness_settings(&store).is_empty());
+    }
+
+    #[test]
+    fn saving_cannot_widen() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        let saved = HarnessSettings { tools: Some(s(&["read_file", "run_command"])), max_steps: Some(999), ..Default::default() };
+        let v = save_harness_settings(&store, "build-next-story", Some(saved)).unwrap();
+        assert_eq!(v[0].tools, s(&["read_file"]));
+        assert_eq!(v[0].max_steps, 40);
+    }
+
+    #[test]
+    fn unknown_sessions_are_refused() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        assert_eq!(save_harness_settings(&store, "nope", None).unwrap_err(), "nope is not a session type");
+    }
 
     #[test]
     fn story_ids_cannot_leave_the_runs_folder() {

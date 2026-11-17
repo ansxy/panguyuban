@@ -752,6 +752,20 @@ async fn builder_build_story(
 }
 
 #[tauri::command]
+fn builder_harness_settings(state: tauri::State<'_, DesktopController>) -> Result<Vec<builder::HarnessSessionView>, String> {
+    Ok(builder::harness_settings(&state.store))
+}
+
+#[tauri::command]
+fn builder_save_harness_settings(
+    state: tauri::State<'_, DesktopController>,
+    session_id: String,
+    settings: Option<agent_runtime::HarnessSettings>,
+) -> Result<Vec<builder::HarnessSessionView>, String> {
+    builder::save_harness_settings(&state.store, &session_id, settings)
+}
+
+#[tauri::command]
 fn builder_stop_build(project_id: String) -> bool {
     builder::stop_build(&project_id)
 }
@@ -975,6 +989,8 @@ pub fn run() {
             builder_design,
             builder_build_story,
             builder_stop_build,
+            builder_harness_settings,
+            builder_save_harness_settings,
             builder_save_prd,
             term_open,
             term_read,

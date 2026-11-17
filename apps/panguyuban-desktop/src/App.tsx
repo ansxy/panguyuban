@@ -26,6 +26,7 @@ import { AgentsView, shortPath, SidebarAgents, useAgents } from "./Agents";
 import { BuilderView, canTeamReview, startTeamReview, useBuilder } from "./Builder";
 import { agentById } from "./builder_flow";
 import { ProvidersSection } from "./ProvidersSettings";
+import { HarnessSection } from "./HarnessSettings";
 import { FEATURES, type FeatureKey, useFeatures } from "./features";
 import { SidebarSpaces, TerminalStages, useSpaces } from "./Spaces";
 import { FolderPanel, PanelMode } from "./FolderPanel";
@@ -1606,6 +1607,8 @@ export function App(): React.JSX.Element {
                   </section>
 
                   <ProvidersSection />
+
+                  <HarnessSection />
 
                   <section className="settings-section">
                     <div className="settings-aside">
