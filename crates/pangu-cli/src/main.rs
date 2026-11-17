@@ -1,3 +1,4 @@
+mod claude;
 mod hook;
 mod repl;
 mod session;
@@ -59,6 +60,7 @@ fn main() {
                 let _ = catch_unwind(AssertUnwindSafe(|| hook::record(agent, &stdin_text(), &s)));
             }
         }
+        Some("claude") => exit(claude::run(&args[1..])),
         Some("allow") => {
             let Some(command) = args.get(1) else {
                 eprintln!("usage: pangu allow \"<command>\"");

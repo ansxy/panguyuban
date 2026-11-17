@@ -49,7 +49,6 @@ impl Session {
         session_from(get("PANGU_SESSION"), get("PANGU_ROOT"))
     }
 
-    #[allow(dead_code)] // used by the claude launcher
     pub fn env(&self) -> [(&'static str, String); 2] {
         [("PANGU_SESSION", self.id.clone()), ("PANGU_ROOT", self.root.to_string_lossy().into_owned())]
     }

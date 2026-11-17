@@ -53,9 +53,9 @@ fn skill_body(raw: &str) -> &str {
     }
 }
 
-const WORK_ON_PROJECT: &str = include_str!("../../../skills/product/work-on-project/SKILL.md");
+pub const WORK_ON_PROJECT: &str = include_str!("../../../skills/product/work-on-project/SKILL.md");
 // ponytail: add a line here when a skill lands under skills/engineering/
-const ENGINEERING: &[(&str, &str)] =
+pub const ENGINEERING: &[(&str, &str)] =
     &[("endpoint-requests", include_str!("../../../skills/engineering/endpoint-requests/SKILL.md"))];
 
 pub fn system_prompt(root: &Path, tools: &[String]) -> String {
