@@ -12,12 +12,14 @@ use crate::{cap_output, Hook, RuntimeError, StopReason, Task, TaskEvent, TaskOut
 
 const NAME: &str = "provider";
 
+#[derive(Debug)]
 pub struct ToolCall {
     pub id: String,
     pub name: String,
     pub arguments: String,
 }
 
+#[derive(Debug)]
 pub struct ChatReply {
     pub text: String,
     pub tool_calls: Vec<ToolCall>,
