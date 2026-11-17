@@ -61,11 +61,11 @@ impl Workspace {
         std::fs::write(&full, content).map_err(|e| format!("cannot write {rel}: {e}"))
     }
 
-    /// Whether `rel` may be written: never inside `.git`, otherwise only the allowed paths.
+    /// Whether `rel` may be written: never inside any `.git` folder (nested ones included), otherwise only the allowed paths.
     pub fn check_write(&self, rel: &str) -> Result<(), String> {
         // The canonical path, so `..` and linked folders cannot hide `.git` or the write list.
         let normal = crate::relative_to(&self.root, rel).ok_or_else(|| format!("path is outside the project folder: {rel:?}"))?;
-        if normal.split('/').next().is_some_and(|c| c.eq_ignore_ascii_case(".git")) {
+        if normal.split('/').any(|c| c.eq_ignore_ascii_case(".git")) {
             return Err("the .git folder is off limits".into());
         }
         if !self.write_paths.iter().any(|w| w == "*" || *w == normal) {
@@ -386,6 +386,9 @@ mod tests {
         let err = ws.write(".git/config", "x").unwrap_err();
         assert!(err.contains("off limits"));
         assert!(!dir.path().join(".git").exists());
+        assert!(ws.check_write("a/.git/hooks/pre-commit").unwrap_err().contains("off limits"));
+        assert!(ws.check_write("a/b/.GIT/config").is_err());
+        assert!(ws.check_write("a/.gitignore").is_ok());
     }
 
     #[test]

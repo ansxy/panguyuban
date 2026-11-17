@@ -117,6 +117,7 @@ mod tests {
         assert_eq!(decide(&c, &w("src/a.ts")), Decision::Allow);
         assert_eq!(decide(&c, &w(".git/hooks/pre-commit")), Decision::Deny("the .git folder is off limits".into()));
         assert!(matches!(decide(&c, &w(".GIT/config")), Decision::Deny(_)));
+        assert_eq!(decide(&c, &w("a/.git/hooks/pre-commit")), Decision::Deny("the .git folder is off limits".into()));
     }
 
     #[test]
