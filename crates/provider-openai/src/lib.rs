@@ -14,6 +14,7 @@ use serde_json::{json, Value};
 #[serde(rename_all = "camelCase")]
 pub struct SavedProvider {
     pub id: String,
+    #[serde(default)]
     pub name: String,
     pub base_url: String,
 }
@@ -216,6 +217,12 @@ fn parse_tool_reply(body: &str) -> Result<ChatReply, String> {
 mod tests {
     use super::*;
     use std::path::Path;
+
+    #[test]
+    fn a_provider_without_a_name_still_loads() {
+        let ps: Vec<SavedProvider> = serde_json::from_str(r#"[{"id":"p1","baseUrl":"http://localhost:1"}]"#).unwrap();
+        assert_eq!((ps[0].id.as_str(), ps[0].name.as_str()), ("p1", ""));
+    }
 
     #[test]
     fn base_urls_are_trimmed() {
