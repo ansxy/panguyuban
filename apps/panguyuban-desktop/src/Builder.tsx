@@ -1,6 +1,8 @@
 import React, { useEffect, useRef, useState, type CSSProperties } from "react";
 import {
   builderAgents,
+  builderBuildStory,
+  builderStopBuild,
   builderDesign,
   builderInterviewTurn,
   builderModels,
@@ -44,6 +46,11 @@ import {
   awaitingApproval,
   blockedStories,
   buildCurrentStory,
+  realBuild,
+  startStoryBuild,
+  addBuildStep,
+  applyStoryBuild,
+  storyBuildFailed,
   canChooseBuild,
   canConfirmStory,
   canFinishPrototype,
@@ -850,6 +857,8 @@ function SessionPane(props: { builder: Builder; project: Project; onNew: () => v
 interface PrimaryAction {
   label: string;
   run?: (p: Project) => Project;
+  /** Starts the async part after `run` has been applied (a real build). */
+  then?: (builder: Builder, p: Project) => void;
   /** Why the button is disabled, in the user's terms. */
   blocked?: string;
 }
@@ -900,7 +909,17 @@ function primaryAction(p: Project): PrimaryAction | null {
     case "build":
       if (!story) return null;
       if (p.pendingChange) return { label: `Build ${story.id}`, blocked: "Choose what kind of change this is first" };
+      if (p.buildRun) return { label: `Building ${p.buildRun.storyId}…`, blocked: `${p.buildRun.storyId} is being built` };
       if (story.status === "todo") {
+        const real = realBuild(p, story);
+        if (real && "blocked" in real) return { label: `Build ${story.id}`, blocked: real.blocked };
+        if (real && !(story.needsEngineer && !story.engineerCleared)) {
+          return {
+            label: `Build ${story.id}`,
+            run: (q) => startStoryBuild(q, real.agent.id),
+            then: (b, q) => runStoryBuild(b, q, real.agent, story.id),
+          };
+        }
         return story.needsEngineer && !story.engineerCleared
           ? { label: `Build ${story.id}`, blocked: `${story.id} must be cleared by an engineer or moved to later` }
           : { label: `Build ${story.id}`, run: buildCurrentStory };
@@ -919,6 +938,28 @@ function primaryAction(p: Project): PrimaryAction | null {
     case "done":
       return null;
   }
+}
+
+/** Runs the harness for one step; every result lands through updateById so leaving the project is safe. */
+function runStoryBuild(builder: Builder, p: Project, agent: AgentDef, storyId: string) {
+  const id = p.id;
+  builderBuildStory(
+    {
+      projectId: id,
+      projectName: p.name,
+      harness: agent.harness,
+      agentLabel: agent.label,
+      model: agent.model,
+      prd: prdMarkdown(p),
+      storyId,
+    },
+    (e) =>
+      builder.updateById(id, (q) =>
+        addBuildStep(q, e.kind === "step" ? `${e.ok ? "" : "✗ "}${e.summary}` : e.text)
+      )
+  )
+    .then((r) => builder.updateById(id, (q) => applyStoryBuild(q, r)))
+    .catch((err) => builder.updateById(id, (q) => storyBuildFailed(q, String(err))));
 }
 
 function InspectorPane({ builder, project }: { builder: Builder; project: Project }) {
@@ -977,6 +1018,7 @@ function InspectorPane({ builder, project }: { builder: Builder; project: Projec
                 if (!action.run) return;
                 const next = action.run(project);
                 builder.update(action.run);
+                action.then?.(builder, next);
                 saveApproved(builder, project, next);
                 // The handover goes in the prototype's folder, beside the PRD and the prototype.
                 if (!project.handover && next.handover) {
@@ -1101,6 +1143,21 @@ function StepsTab(props: { builder: Builder; project: Project; setupAt: number }
               ? "The orchestrator gives hard steps to the lead agent and small ones to a worker."
               : "Pick an agent per step. Steps left on Auto follow the orchestrator."}
           </span>
+        </div>
+      )}
+
+      {project.buildRun && (
+        <div className="builder-run" role="status" aria-label="Build progress">
+          <ol className="builder-rows">
+            {project.buildRun.steps.map((line, i) => (
+              <li key={i} className="builder-row">
+                {line}
+              </li>
+            ))}
+          </ol>
+          <button type="button" className="btn" onClick={() => void builderStopBuild(project.id)}>
+            Stop
+          </button>
         </div>
       )}
 
@@ -1273,7 +1330,8 @@ function StoryRow(props: {
 
 function PreviewTab({ project }: { project: Project }) {
   const shown = project.stories.filter((s) => s.status !== "todo");
-  if (project.designHtml) {
+  const app = project.stage === "build" ? project.appHtml ?? null : null;
+  if (app ?? project.designHtml) {
     return (
       <>
         <span className="field-help">
@@ -1290,8 +1348,9 @@ function PreviewTab({ project }: { project: Project }) {
           className="design-frame"
           title="Prototype"
           sandbox="allow-scripts allow-forms"
-          srcDoc={lockedDesign(project.designHtml)}
+          srcDoc={lockedDesign((app ?? project.designHtml)!)}
         />
+        {app && <span className="field-help">Standards checks are not run yet.</span>}
       </>
     );
   }

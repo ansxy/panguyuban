@@ -1,3 +1,5 @@
+import { Channel } from "@tauri-apps/api/core";
+
 export type TicketState =
   | "Backlog"
   | "Todo"
@@ -717,4 +719,44 @@ export async function agentClis(): Promise<{ id: string; available: boolean }[]>
     return window.__TAURI_INTERNALS__.invoke<{ id: string; available: boolean }[]>("agent_clis");
   }
   return [];
+}
+
+export type TaskEvent =
+  | { kind: "step"; tool: string; summary: string; ok: boolean }
+  | { kind: "message"; text: string };
+
+export interface BuildStoryResult {
+  message: string;
+  steps: number;
+  stopped: null | "maxSteps" | "timedOut" | "cancelled";
+  html: string | null;
+}
+
+/** Has the agent build one step into app/index.html, streaming each tool step as it happens. */
+export async function builderBuildStory(
+  args: {
+    projectId: string;
+    projectName: string;
+    harness: string;
+    agentLabel: string;
+    model: string | null;
+    prd: string;
+    storyId: string;
+  },
+  onEvent: (e: TaskEvent) => void
+): Promise<BuildStoryResult> {
+  if (window.__TAURI_INTERNALS__?.invoke) {
+    const channel = new Channel<TaskEvent>();
+    channel.onmessage = onEvent;
+    return window.__TAURI_INTERNALS__.invoke<BuildStoryResult>("builder_build_story", { args, onEvent: channel });
+  }
+  throw new Error("Building needs the desktop app");
+}
+
+/** Stops the build running for this project; false when none was running. */
+export async function builderStopBuild(projectId: string): Promise<boolean> {
+  if (window.__TAURI_INTERNALS__?.invoke) {
+    return window.__TAURI_INTERNALS__.invoke<boolean>("builder_stop_build", { projectId });
+  }
+  return false;
 }
