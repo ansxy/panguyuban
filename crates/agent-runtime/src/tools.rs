@@ -106,7 +106,7 @@ pub trait Tool: Send + Sync {
     fn run(&self, ws: &Workspace, args: &Value) -> ToolResult;
 }
 
-fn definition(name: &str, description: &str, properties: Value, required: &[&str]) -> Value {
+pub(crate) fn definition(name: &str, description: &str, properties: Value, required: &[&str]) -> Value {
     json!({"type": "function", "function": {
         "name": name,
         "description": description,
@@ -115,7 +115,7 @@ fn definition(name: &str, description: &str, properties: Value, required: &[&str
 }
 
 /// A required string argument, or a refusal naming the problem.
-fn str_arg<'a>(args: &'a Value, field: &str) -> Result<&'a str, ToolResult> {
+pub(crate) fn str_arg<'a>(args: &'a Value, field: &str) -> Result<&'a str, ToolResult> {
     args.get(field).and_then(Value::as_str).ok_or_else(|| {
         ToolResult::refused(format!("refused: bad {field}"), format!("missing or not a string: {field}"))
     })

@@ -9,6 +9,7 @@
 
 mod antigravity;
 mod build;
+mod commands;
 mod claude;
 mod harness;
 mod hooks;
@@ -27,6 +28,7 @@ use serde::{Deserialize, Serialize};
 pub use antigravity::AntigravityRuntime;
 pub use build::*;
 pub use claude::ClaudeRuntime;
+pub use commands::*;
 pub use harness::*;
 pub use hooks::*;
 pub use policy::*;
