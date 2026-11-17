@@ -115,13 +115,22 @@ export function AgentsView(props: {
   /** Opens a handoff of this folder; absent when the Memory feature is off. */
   onHandOff?: (cwd: string, name: string) => void;
   teams: TeamEntry[];
+  /** Prototypes whose PRD a team can review; empty when Prototypes is off. */
+  reviewable: { id: string; name: string }[];
+  onStartTeam: (projectId: string) => void;
   onOpenTeam: (projectId: string) => void;
 }) {
   useReviewInFlight();
   const { sessions, usage, error, selectedId, setSelectedId } = props.agents;
   const [filter, setFilter] = useState<StatusFilter>("all");
+  const [tab, setTab] = useState<"sessions" | "teams">(selectedId.startsWith("team:") ? "teams" : "sessions");
   const now = useNow(5_000);
   const announcement = useWaitingAnnouncement(sessions);
+
+  // Opening a session or team from elsewhere (the sidebar, a start) shows its tab.
+  useEffect(() => {
+    if (selectedId) setTab(selectedId.startsWith("team:") ? "teams" : "sessions");
+  }, [selectedId]);
 
   const sorted = [...sessions].sort(
     (a, b) => STATUS[a.status].rank - STATUS[b.status].rank || b.started_ms - a.started_ms
@@ -131,154 +140,204 @@ export function AgentsView(props: {
   const groups = (["waiting", "busy", "idle"] as const)
     .map((status) => ({ status, items: visible.filter((s) => s.status === status) }))
     .filter((g) => g.items.length > 0);
-  // A team is Working only while its review is actually executing; a stored "running" review may be stale.
-  const teamStatus = (t: TeamEntry): AgentStatus => (isReviewInFlight(t.projectId) ? "busy" : "idle");
-  const visibleTeams = props.teams.filter((t) => filter === "all" || teamStatus(t) === filter);
+  const count = (st: AgentStatus) => sessions.filter((s) => s.status === st).length;
+
+  // Running reviews first, then newest. A stored "running" review may be stale, so in-flight decides.
   const teamSort = (t: TeamEntry) => (isReviewInFlight(t.projectId) ? 0 : 1);
-  visibleTeams.sort((a, b) => teamSort(a) - teamSort(b) || b.review.startedAt - a.review.startedAt);
-  const activeTeam = visibleTeams.find((t) => "team:" + t.projectId === selectedId);
-  // With no session visible and nothing selected, the first visible team fills the detail pane.
-  const shownTeam = activeTeam ?? (!active ? visibleTeams[0] : undefined);
-  const total = sessions.length + props.teams.length;
-  const count = (st: AgentStatus) =>
-    sessions.filter((s) => s.status === st).length + props.teams.filter((t) => teamStatus(t) === st).length;
+  const teams = [...props.teams].sort(
+    (a, b) => teamSort(a) - teamSort(b) || b.review.startedAt - a.review.startedAt
+  );
+  const shownTeam = teams.find((t) => "team:" + t.projectId === selectedId) ?? teams[0];
+
+  function startTeam(projectId: string) {
+    props.onStartTeam(projectId);
+    setSelectedId("team:" + projectId);
+  }
 
   return (
     <>
-      <section id="agent-list" className="pane pane--list" aria-label="Agent sessions">
+      <section id="agent-list" className="pane pane--list" aria-label="Agents">
         {props.splitter}
         <div className="visually-hidden" role="status">
           {announcement}
         </div>
         <div className="pane-header">
           <h1>Agents</h1>
-          <span className="measured">{total}</span>
+          <span className="measured">{sessions.length + teams.length}</span>
         </div>
 
-        <FilterTabs
-          label="Agent status filter"
-          value={filter}
-          onChange={setFilter}
-          options={[
-            { value: "all", label: "All", count: total },
-            { value: "waiting", label: "Needs you", count: count("waiting") },
-            { value: "busy", label: "Working", count: count("busy") },
-            { value: "idle", label: "Idle", count: count("idle") },
-          ]}
-        />
+        <div className="req-subtabs agents-tabs" role="tablist" aria-label="Agents view">
+          {(["sessions", "teams"] as const).map((key) => (
+            <button
+              key={key}
+              type="button"
+              role="tab"
+              className="req-subtab"
+              aria-selected={tab === key}
+              onClick={() => setTab(key)}
+            >
+              {key === "sessions" ? "Sessions" : "Teams"}
+              <span className="req-subtab-count">{key === "sessions" ? sessions.length : teams.length}</span>
+            </button>
+          ))}
+        </div>
 
-        {error && <p className="agent-error">Could not read agents: {error}</p>}
+        {tab === "sessions" ? (
+          <>
+            <FilterTabs
+              label="Agent status filter"
+              value={filter}
+              onChange={setFilter}
+              options={[
+                { value: "all", label: "All", count: sessions.length },
+                { value: "waiting", label: "Needs you", count: count("waiting") },
+                { value: "busy", label: "Working", count: count("busy") },
+                { value: "idle", label: "Idle", count: count("idle") },
+              ]}
+            />
 
-        {visibleTeams.length > 0 && (
-          <section className="ticket-group" aria-label="Team reviews">
-            <div className="ticket-group-head">
-              <h2>Team reviews</h2>
-              <span className="measured">{visibleTeams.length}</span>
-            </div>
-            <ul className="ticket-rows">
-              {visibleTeams.map((t) => {
-                const selected = !!shownTeam && t.projectId === shownTeam.projectId;
-                const inFlight = isReviewInFlight(t.projectId);
-                return (
-                  <li key={t.projectId}>
-                    <button
-                      type="button"
-                      className="ticket-row"
-                      data-selected={selected ? "true" : "false"}
-                      aria-current={selected ? "true" : undefined}
-                      onClick={() => setSelectedId("team:" + t.projectId)}
-                    >
-                      <span className="ticket-row-top">
-                        <span className="agents-name">{t.name}</span>
-                        <span className="agents-since">{duration(now - (inFlight ? t.review.startedAt : t.review.finishedAt ?? t.review.startedAt))}</span>
-                      </span>
-                      <span className="agents-meta">
-                        <span className="agents-meta-path">
-                          PRD review · {t.agentLabel} · {reviewSummary(t.review)}
-                        </span>
-                      </span>
-                      <span className="agents-strip" aria-hidden="true">
-                        {TEAM_ROLES.map((r) => (
-                          <span key={r} className={`is-${t.review.nodes[r].status}`} title={ROLE_LABEL[r]} />
-                        ))}
-                      </span>
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
-          </section>
-        )}
+            {error && <p className="agent-error">Could not read agents: {error}</p>}
 
-        {visible.length === 0 && visibleTeams.length === 0 ? (
-          <p className="agent-empty">
-            {sessions.length === 0 && props.teams.length === 0
-              ? "No agent sessions running. Start claude or Antigravity in a terminal and it shows up here."
-              : "No sessions match this filter."}
-          </p>
+            {visible.length === 0 ? (
+              <p className="agent-empty">
+                {sessions.length === 0
+                  ? "No agent sessions running. Start claude or Antigravity in a terminal and it shows up here."
+                  : "No sessions match this filter."}
+              </p>
+            ) : (
+              groups.map((group) => (
+                <section key={group.status} className="ticket-group" aria-label={`${STATUS[group.status].label} sessions`}>
+                  <div className="ticket-group-head">
+                    <h2>{STATUS[group.status].label}</h2>
+                    <span className="measured">{group.items.length}</span>
+                  </div>
+                  <ul className="ticket-rows">
+                    {group.items.map((s) => {
+                      const selected = s.session_id === active?.session_id;
+                      const running = s.subagents.filter((a) => !a.finished).length;
+                      return (
+                        <li key={s.session_id}>
+                          <button
+                            type="button"
+                            className="ticket-row"
+                            data-selected={selected ? "true" : "false"}
+                            aria-current={selected ? "true" : undefined}
+                            onClick={() => setSelectedId(s.session_id)}
+                          >
+                            <span className="ticket-row-top">
+                              <span className="agents-name">{s.name}</span>
+                              <span className="agents-since" data-status={s.status}>
+                                {duration(now - s.status_since_ms)}
+                              </span>
+                            </span>
+                            <span className="agents-meta">
+                              <span>{s.harness === "claude" ? "Claude" : "Antigravity"}</span>
+                              {shortModel(s.model) && <span>{shortModel(s.model)}</span>}
+                              <span className="agents-meta-path">{shortPath(s.cwd)}</span>
+                            </span>
+                            {running > 0 && (
+                              <span className="agents-running">
+                                {running} {running === 1 ? "subagent" : "subagents"} running
+                              </span>
+                            )}
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </section>
+              ))
+            )}
+
+            <UsageMeters usage={usage} sessions={sessions} now={now} />
+          </>
         ) : (
-          groups.map((group) => (
-            <section key={group.status} className="ticket-group" aria-label={`${STATUS[group.status].label} sessions`}>
-              <div className="ticket-group-head">
-                <h2>{STATUS[group.status].label}</h2>
-                <span className="measured">{group.items.length}</span>
-              </div>
+          <>
+            <StartTeam reviewable={props.reviewable} onStart={startTeam} />
+            {teams.length === 0 ? (
+              <p className="agent-empty">
+                No team reviews yet. Five agents read a prototype's PRD: an Engineer, UX and QA at the same
+                time, then a Contrarian who pushes back, then a Leader who gives one verdict.
+              </p>
+            ) : (
               <ul className="ticket-rows">
-                {group.items.map((s) => {
-                  const selected = !shownTeam && s.session_id === active?.session_id;
-                  const running = s.subagents.filter((a) => !a.finished).length;
+                {teams.map((t) => {
+                  const selected = t.projectId === shownTeam?.projectId;
+                  const inFlight = isReviewInFlight(t.projectId);
                   return (
-                    <li key={s.session_id}>
+                    <li key={t.projectId}>
                       <button
                         type="button"
                         className="ticket-row"
                         data-selected={selected ? "true" : "false"}
                         aria-current={selected ? "true" : undefined}
-                        onClick={() => setSelectedId(s.session_id)}
+                        onClick={() => setSelectedId("team:" + t.projectId)}
                       >
                         <span className="ticket-row-top">
-                          <span className="agents-name">{s.name}</span>
-                          <span className="agents-since" data-status={s.status}>
-                            {duration(now - s.status_since_ms)}
+                          <span className="agents-name">{t.name}</span>
+                          <span className="agents-since" data-status={inFlight ? "busy" : "idle"}>
+                            {duration(now - (inFlight ? t.review.startedAt : t.review.finishedAt ?? t.review.startedAt))}
                           </span>
                         </span>
                         <span className="agents-meta">
-                          <span>{s.harness === "claude" ? "Claude" : "Antigravity"}</span>
-                          {shortModel(s.model) && <span>{shortModel(s.model)}</span>}
-                          <span className="agents-meta-path">{shortPath(s.cwd)}</span>
-                        </span>
-                        {running > 0 && (
-                          <span className="agents-running">
-                            {running} {running === 1 ? "subagent" : "subagents"} running
+                          <span className="agents-meta-path">
+                            PRD review · {t.agentLabel} · {reviewSummary(t.review)}
                           </span>
-                        )}
+                        </span>
+                        <span className="agents-strip" aria-hidden="true">
+                          {TEAM_ROLES.map((r) => (
+                            <span key={r} className={`is-${t.review.nodes[r].status}`} title={ROLE_LABEL[r]} />
+                          ))}
+                        </span>
                       </button>
                     </li>
                   );
                 })}
               </ul>
-            </section>
-          ))
+            )}
+          </>
         )}
-
-        <UsageMeters usage={usage} sessions={sessions} now={now} />
       </section>
 
-      <section className="pane pane--detail ticket-detail" aria-label="Selected agent session">
-        {shownTeam ? (
-          <>
+      <section className="pane pane--detail ticket-detail" aria-label={tab === "teams" ? "Selected team review" : "Selected agent session"}>
+        {tab === "teams" ? (
+          shownTeam ? (
+            <>
+              <div className="pane-header">
+                <h2>{shownTeam.name}</h2>
+                <div className="pane-tools">{props.focusButton}</div>
+              </div>
+              <p className="agents-meta">
+                PRD review · {shownTeam.agentLabel} · started {duration(now - shownTeam.review.startedAt)} ago
+              </p>
+              <div className="action-group">
+                <button type="button" className="btn" onClick={() => props.onOpenTeam(shownTeam.projectId)}>
+                  Open in Prototypes →
+                </button>
+                {props.reviewable.some((r) => r.id === shownTeam.projectId) && (
+                  <button
+                    type="button"
+                    className="btn"
+                    disabled={isReviewInFlight(shownTeam.projectId)}
+                    onClick={() => startTeam(shownTeam.projectId)}
+                  >
+                    Run again
+                  </button>
+                )}
+              </div>
+              <TeamFlow
+                key={shownTeam.review.startedAt}
+                review={shownTeam.review}
+                now={now}
+                running={isReviewInFlight(shownTeam.projectId)}
+              />
+            </>
+          ) : (
             <div className="pane-header">
-              <h2>{shownTeam.name}</h2>
+              <h2>No team review yet</h2>
               <div className="pane-tools">{props.focusButton}</div>
             </div>
-            <p className="agents-meta">
-              PRD review · {shownTeam.agentLabel} · started {duration(now - shownTeam.review.startedAt)} ago
-            </p>
-            <button type="button" className="btn" onClick={() => props.onOpenTeam(shownTeam.projectId)}>
-              Open in Prototypes →
-            </button>
-            <TeamFlow key={shownTeam.projectId} review={shownTeam.review} now={now} running={isReviewInFlight(shownTeam.projectId)} />
-          </>
+          )
         ) : active ? (
           <AgentDetail key={active.session_id} session={active} now={now} focusButton={props.focusButton} onEnded={props.agents.refresh} onHandOff={props.onHandOff} />
         ) : (
@@ -289,6 +348,49 @@ export function AgentsView(props: {
         )}
       </section>
     </>
+  );
+}
+
+/** Picks a prototype and starts a team review of its PRD. */
+function StartTeam({
+  reviewable,
+  onStart,
+}: {
+  reviewable: { id: string; name: string }[];
+  onStart: (projectId: string) => void;
+}) {
+  const [picked, setPicked] = useState("");
+  const id = reviewable.some((r) => r.id === picked) ? picked : (reviewable[0]?.id ?? "");
+  if (reviewable.length === 0) {
+    return (
+      <p className="field-help agents-start">
+        A team review needs a prototype whose PRD an agent wrote. Create one in Prototypes.
+      </p>
+    );
+  }
+  const running = isReviewInFlight(id);
+  return (
+    <form
+      className="agents-start"
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (id && !running) onStart(id);
+      }}
+    >
+      <label htmlFor="team-start-pick" className="visually-hidden">
+        Prototype to review
+      </label>
+      <select id="team-start-pick" value={id} onChange={(e) => setPicked(e.target.value)}>
+        {reviewable.map((r) => (
+          <option key={r.id} value={r.id}>
+            {r.name}
+          </option>
+        ))}
+      </select>
+      <button type="submit" className="btn btn--primary" disabled={!id || running}>
+        {running ? "Reviewing…" : "Start team review"}
+      </button>
+    </form>
   );
 }
 

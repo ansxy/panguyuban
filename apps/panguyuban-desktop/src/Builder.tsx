@@ -311,7 +311,8 @@ export async function runTeamReview(builder: Builder, projectId: string, review:
     if (!cur) return false;
     // ">" not "!==": the ref lags render, so a missing or older review is not-yet-rendered, not replaced.
     if (cur.teamReview && cur.teamReview.startedAt > local.startedAt) return false;
-    if (cur.prdApproved || isStale(local, prdMarkdown(cur))) {
+    // Approving rewrites the PRD's Status line, so a PRD approved mid-run counts as changed too.
+    if (isStale(local, prdMarkdown(cur))) {
       // The wave's results are dropped: interrupt the state from before them.
       const stopped = interrupt(before, Date.now());
       builder.updateById(projectId, (p) =>
@@ -320,7 +321,7 @@ export async function runTeamReview(builder: Builder, projectId: string, review:
       return false;
     }
     builder.updateById(projectId, (p) => {
-      if (!p.teamReview || p.prdApproved || p.teamReview.startedAt !== next.startedAt) return p;
+      if (!p.teamReview || p.teamReview.startedAt !== next.startedAt) return p;
       if (isStale(p.teamReview, prdMarkdown(p))) return p;
       const saved = { ...p, teamReview: next };
       return note ? record(saved, "review", note) : saved;
@@ -370,6 +371,20 @@ export async function runTeamReview(builder: Builder, projectId: string, review:
 }
 
 export type Builder = ReturnType<typeof useBuilder>;
+
+/** A team can review any PRD an agent wrote, approved or not; on an approved one it only advises. */
+export function canTeamReview(p: Project): boolean {
+  return isLive(p) && !!p.prdText;
+}
+
+/** Starts a fresh review of the project's current PRD, from the PRD tab or the Agents page. */
+export function startTeamReview(builder: Builder, projectId: string): void {
+  const p = builder.projectById(projectId);
+  if (!p || !canTeamReview(p) || isReviewInFlight(projectId)) return;
+  const fresh = startReview(prdMarkdown(p), Date.now());
+  builder.updateById(projectId, (q) => ({ ...q, teamReview: fresh }));
+  void runTeamReview(builder, projectId, fresh);
+}
 
 export function BuilderView({ builder }: { builder: Builder }) {
   const { project, loaded, loadError } = builder;
@@ -1329,15 +1344,13 @@ function PrdTab({ builder, project }: { builder: Builder; project: Project }) {
     );
   }
   const review = project.teamReview;
-  const canReview = isLive(project) && !!project.prdText && !project.prdApproved;
+  const canReview = canTeamReview(project);
   const stale = !!review && isStale(review, prdMarkdown(project));
   const waiting = awaitingApproval(project);
   const fixes =
     review && reviewState(review) === "done" && waiting && !stale ? (review.nodes.leader.result?.fixes ?? "") : "";
   function start() {
-    const fresh = startReview(prdMarkdown(project), Date.now());
-    builder.update((p) => ({ ...p, teamReview: fresh }));
-    void runTeamReview(builder, project.id, fresh);
+    startTeamReview(builder, project.id);
   }
   function retry(role: ReviewRole) {
     if (!review) return;
@@ -1361,7 +1374,7 @@ function PrdTab({ builder, project }: { builder: Builder; project: Project }) {
           review={review}
           now={now}
           running={running}
-          onRetry={!project.prdApproved && !stale ? retry : undefined}
+          onRetry={!stale ? retry : undefined}
         />
       )}
       {review && (
@@ -1385,7 +1398,7 @@ function PrdTab({ builder, project }: { builder: Builder; project: Project }) {
           )}
         </div>
       )}
-      {review && stale && !project.prdApproved && (
+      {review && stale && (
         <p className="team-flow-note">
           PRD changed since this review.{" "}
           {canReview && (

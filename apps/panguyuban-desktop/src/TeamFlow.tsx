@@ -52,8 +52,11 @@ export function TeamFlow({
     <div className="team-flow">
       <div className="team-flow-graph">
         <span className="team-flow-prd">PRD</span>
+        <span className="team-flow-arrow" aria-hidden="true">→</span>
         <div className="team-flow-col">{SPECIALISTS.map(node)}</div>
+        <span className="team-flow-arrow" aria-hidden="true">→</span>
         {node("contrarian")}
+        <span className="team-flow-arrow" aria-hidden="true">→</span>
         {node("leader")}
       </div>
       {running && <p className="field-help">Reviewing for {duration(now - review.startedAt)}</p>}

@@ -3473,6 +3473,7 @@ html[data-resizing="row"] {
 .team-flow-graph { display: flex; align-items: center; gap: var(--space-md); overflow-x: auto; }
 .team-flow-col { display: grid; gap: var(--space-xs); }
 .team-flow-prd { font-family: var(--font-outlier); font-size: var(--text-xs); color: var(--color-muted); }
+.team-flow-arrow { flex: none; color: var(--color-muted); }
 .team-flow-node {
   display: grid; grid-template-columns: auto 1fr; column-gap: var(--space-xs); align-items: center;
   min-width: 9rem; padding: var(--space-xs) var(--space-sm);
@@ -3503,3 +3504,29 @@ html[data-resizing="row"] {
 .agents-strip > .is-working { background: var(--color-accent); }
 .agents-strip > .is-done { background: var(--color-ok); }
 .agents-strip > .is-failed { background: var(--color-bad); }
+
+/* Agents: Sessions | Teams tabs, and the start-a-review row on Teams. */
+.agents-tabs {
+  padding: 0 var(--space-md);
+}
+
+.agents-start {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-xs);
+  align-items: center;
+  padding: var(--space-sm) var(--space-md);
+  border-bottom: var(--rule-hair) solid var(--color-rule);
+}
+
+.agents-start select {
+  flex: 1 1 10rem;
+  min-width: 0;
+  min-height: 36px;
+  padding: 0 var(--space-sm);
+  border: var(--rule-hair) solid var(--color-rule-2);
+  border-radius: var(--radius-pill);
+  background: var(--color-paper-2);
+  color: var(--color-ink);
+  font-size: var(--text-sm);
+}

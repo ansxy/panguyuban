@@ -23,7 +23,7 @@ import {
 } from "./api";
 import { DiffFiles, FilterTabs, Icon, type IconName, Logo } from "./ui";
 import { AgentsView, shortPath, SidebarAgents, useAgents } from "./Agents";
-import { BuilderView, useBuilder } from "./Builder";
+import { BuilderView, canTeamReview, startTeamReview, useBuilder } from "./Builder";
 import { agentById } from "./builder_flow";
 import { ProvidersSection } from "./ProvidersSettings";
 import { FEATURES, type FeatureKey, useFeatures } from "./features";
@@ -1283,6 +1283,12 @@ export function App(): React.JSX.Element {
                     ? [{ projectId: p.id, name: p.name, agentLabel: agentById(p.interviewAgent)?.label ?? "Agent", review: p.teamReview }]
                     : []
                 ) : []}
+                reviewable={
+                  features.prototypes
+                    ? builder.projects.filter(canTeamReview).map((p) => ({ id: p.id, name: p.name }))
+                    : []
+                }
+                onStartTeam={(id) => startTeamReview(builder, id)}
                 onOpenTeam={(id) => {
                   builder.select(id);
                   setSection("builder");
