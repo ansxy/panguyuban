@@ -1,11 +1,14 @@
 //! Guided builder commands: which agents are installed, and one interview turn.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Command;
-use std::sync::{Mutex, OnceLock};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use agent_runtime::{
-    design_turn, interview_turn, plan_turn, runtime_for, DesignRequest, InterviewRequest, Plan, Turn,
+    build_prompt, build_system_prompt, effective, harness_sessions, session_type, SessionType, HarnessSettings, StopReason, Task, TaskEvent,
+    design_turn, interview_turn, plan_turn, runtime_for, DesignRequest, InterviewRequest, Plan, ReviewRole, RoleReview, Turn, review_turn,
 };
 use panguyuban_core::storage::SqliteStore;
 use serde::{Deserialize, Serialize};
@@ -155,6 +158,28 @@ pub fn run_plan(store: &SqliteStore, args: PlanArgs) -> Result<Plan, String> {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ReviewStepArgs {
+    pub project_id: String,
+    pub project_name: String,
+    pub harness: String,
+    pub model: Option<String>,
+    pub role: ReviewRole,
+    pub prd: String,
+    /// Reviews already given this round, in order.
+    pub earlier: Vec<RoleReview>,
+}
+
+/// Runs one reviewer's turn over the PRD. Saves nothing; the caller keeps the round.
+pub fn run_review_step(store: &SqliteStore, args: ReviewStepArgs) -> Result<RoleReview, String> {
+    let runtime = crate::provider::runtime_for(store, &args.harness)?;
+    let dir = project_dir(&args.project_name, &args.project_id);
+    std::fs::create_dir_all(&dir).map_err(|e| format!("Could not create {}: {e}", dir.display()))?;
+    review_turn(runtime.as_ref(), args.role, &args.prd, &args.earlier, args.model.as_deref(), &dir)
+        .map_err(|e| e.to_string())
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DesignArgs {
     pub project_id: String,
     pub project_name: String,
@@ -193,6 +218,184 @@ pub fn run_design(store: &SqliteStore, args: DesignArgs) -> Result<DesignResult,
         message: reply.message,
         html: reply.html,
         path: saved.then(|| path.display().to_string()),
+    })
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildStoryArgs {
+    pub project_id: String,
+    pub project_name: String,
+    pub harness: String,
+    pub agent_label: String,
+    pub model: Option<String>,
+    pub prd: String,
+    pub story_id: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildStoryResult {
+    pub message: String,
+    pub steps: u32,
+    pub stopped: Option<StopReason>,
+    /// `app/index.html` after the run, whatever the outcome.
+    pub html: Option<String>,
+}
+
+static BUILDS: Mutex<Option<HashMap<String, Arc<AtomicBool>>>> = Mutex::new(None);
+
+/// Removes the project's entry when the run ends, on any path.
+struct RunGuard {
+    project_id: String,
+    flag: Arc<AtomicBool>,
+}
+
+impl std::ops::Deref for RunGuard {
+    type Target = AtomicBool;
+    fn deref(&self) -> &AtomicBool {
+        &self.flag
+    }
+}
+
+impl Drop for RunGuard {
+    fn drop(&mut self) {
+        if let Ok(mut builds) = BUILDS.lock() {
+            if let Some(map) = builds.as_mut() {
+                map.remove(&self.project_id);
+            }
+        }
+    }
+}
+
+/// `None` when a build for this project is already running.
+fn register(project_id: &str) -> Option<RunGuard> {
+    let mut builds = BUILDS.lock().ok()?;
+    let map = builds.get_or_insert_with(HashMap::new);
+    if map.contains_key(project_id) {
+        return None;
+    }
+    let flag = Arc::new(AtomicBool::new(false));
+    map.insert(project_id.to_string(), flag.clone());
+    Some(RunGuard { project_id: project_id.to_string(), flag })
+}
+
+/// Asks the running build for this project to stop; false when none runs.
+pub fn stop_build(project_id: &str) -> bool {
+    let builds = BUILDS.lock().ok();
+    match builds.as_ref().and_then(|b| b.as_ref()).and_then(|m| m.get(project_id)) {
+        Some(flag) => {
+            flag.store(true, Ordering::SeqCst);
+            true
+        }
+        None => false,
+    }
+}
+
+/// Saved Settings per session type id; missing or unreadable = the registry values apply.
+pub fn load_harness_settings(store: &SqliteStore) -> HashMap<String, HarnessSettings> {
+    store
+        .get_app_data("harness")
+        .ok()
+        .flatten()
+        .and_then(|json| serde_json::from_str(&json).ok())
+        .unwrap_or_default()
+}
+
+/// One session type with its ceiling and the choice currently in force.
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct HarnessSessionView {
+    pub session: SessionType,
+    pub tools: Vec<String>,
+    pub hooks: Vec<String>,
+    pub max_steps: u32,
+    pub timeout_minutes: u32,
+}
+
+pub fn harness_settings(store: &SqliteStore) -> Vec<HarnessSessionView> {
+    let saved = load_harness_settings(store);
+    harness_sessions()
+        .into_iter()
+        .map(|session| {
+            let e = effective(&session, saved.get(&session.id));
+            HarnessSessionView { session, tools: e.tools, hooks: e.hooks, max_steps: e.max_steps, timeout_minutes: (e.timeout.as_secs() / 60) as u32 }
+        })
+        .collect()
+}
+
+/// `None` resets. Stored as given; `effective` narrows on read.
+pub fn save_harness_settings(
+    store: &SqliteStore,
+    session_id: &str,
+    settings: Option<HarnessSettings>,
+) -> Result<Vec<HarnessSessionView>, String> {
+    if !harness_sessions().iter().any(|s| s.id == session_id) {
+        return Err(format!("{session_id} is not a session type"));
+    }
+    let mut all = load_harness_settings(store);
+    match settings {
+        Some(s) => all.insert(session_id.to_string(), s),
+        None => all.remove(session_id),
+    };
+    let json = serde_json::to_string(&all).map_err(|e| e.to_string())?;
+    store.set_app_data("harness", &json).map_err(|e| e.to_string())?;
+    Ok(harness_settings(store))
+}
+
+/// Step ids become part of the run-record file name, so only plain characters pass.
+fn check_story_id(id: &str) -> Result<(), String> {
+    if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
+        return Err(format!("{id} is not a step id"));
+    }
+    Ok(())
+}
+
+/// Builds one PRD step into app/index.html with the harness.
+pub fn run_build_story(
+    store: &SqliteStore,
+    args: BuildStoryArgs,
+    on_event: &dyn Fn(TaskEvent),
+) -> Result<BuildStoryResult, String> {
+    check_story_id(&args.story_id)?;
+    let dir = project_dir(&args.project_name, &args.project_id);
+    std::fs::create_dir_all(dir.join("app")).map_err(|e| format!("Could not create {}: {e}", dir.display()))?;
+    let app = dir.join("app").join("index.html");
+    if !app.exists() {
+        let design = dir.join("design.html");
+        if !design.exists() {
+            return Err("Approve a prototype before building".into());
+        }
+        std::fs::copy(&design, &app).map_err(|e| format!("Could not copy the prototype: {e}"))?;
+    }
+
+    let session = session_type("build-next-story").ok_or("build-next-story is not in the registry")?;
+    let settings = load_harness_settings(store);
+    let eff = effective(&session, settings.get(&session.id));
+    let runtime = crate::provider::task_runtime_for(store, &args.harness, &args.agent_label, &eff)?;
+    let prompt = build_prompt(&args.prd, &args.story_id)?;
+    let cancel = register(&args.project_id).ok_or("A step is already being built for this prototype")?;
+
+    let seconds = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let task = Task {
+        system: build_system_prompt(session.write_paths.first().map_or("app/index.html", String::as_str)),
+        prompt,
+        model: args.model,
+        work_dir: dir.clone(),
+        write_paths: session.write_paths.clone(),
+        max_steps: eff.max_steps,
+        timeout: eff.timeout,
+        record: Some(dir.join(".panguyuban").join("runs").join(format!("{}-{seconds}.jsonl", args.story_id))),
+    };
+    let outcome = runtime.run_task(&task, &cancel, on_event).map_err(|e| e.to_string())?;
+    Ok(BuildStoryResult {
+        message: outcome.message,
+        steps: outcome.steps,
+        stopped: outcome.stopped,
+        html: std::fs::read_to_string(&app).ok(),
     })
 }
 
@@ -254,6 +457,67 @@ fn folder_name(name: &str, id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn s(v: &[&str]) -> Vec<String> {
+        v.iter().map(|x| x.to_string()).collect()
+    }
+
+    #[test]
+    fn harness_settings_start_at_the_ceiling() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        let views = harness_settings(&store);
+        assert_eq!(views.len(), 1);
+        assert_eq!(views[0].session.id, "build-next-story");
+        assert_eq!(views[0].tools, s(&["read_file", "list_files", "search", "write_file", "edit_file"]));
+        assert_eq!(views[0].max_steps, 40);
+    }
+
+    #[test]
+    fn saved_settings_narrow_and_reset() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        let saved = HarnessSettings { tools: Some(s(&["read_file"])), hooks: Some(vec![]), max_steps: Some(5), timeout_minutes: Some(3) };
+        let v = save_harness_settings(&store, "build-next-story", Some(saved)).unwrap();
+        assert_eq!((v[0].tools.clone(), v[0].hooks.clone(), v[0].max_steps, v[0].timeout_minutes), (s(&["read_file"]), vec![], 5, 3));
+        assert!(load_harness_settings(&store).contains_key("build-next-story"));
+        let v = save_harness_settings(&store, "build-next-story", None).unwrap();
+        assert_eq!(v[0].tools.len(), 5);
+        assert_eq!(v[0].max_steps, 40);
+        assert!(load_harness_settings(&store).is_empty());
+    }
+
+    #[test]
+    fn saving_cannot_widen() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        let saved = HarnessSettings { tools: Some(s(&["read_file", "run_command"])), max_steps: Some(999), ..Default::default() };
+        let v = save_harness_settings(&store, "build-next-story", Some(saved)).unwrap();
+        assert_eq!(v[0].tools, s(&["read_file"]));
+        assert_eq!(v[0].max_steps, 40);
+    }
+
+    #[test]
+    fn unknown_sessions_are_refused() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        assert_eq!(save_harness_settings(&store, "nope", None).unwrap_err(), "nope is not a session type");
+    }
+
+    #[test]
+    fn story_ids_cannot_leave_the_runs_folder() {
+        assert!(check_story_id("S1").is_ok() && check_story_id("story_2-a").is_ok());
+        for bad in ["../../x", "S1/x", "", "a.b", "a\\b"] {
+            assert_eq!(check_story_id(bad).unwrap_err(), format!("{bad} is not a step id"));
+        }
+    }
+
+    #[test]
+    fn one_build_per_project() {
+        let first = register("p1").expect("first");
+        assert!(register("p1").is_none());
+        assert!(stop_build("p1"));
+        assert!(!stop_build("p2"));
+        assert!(first.load(std::sync::atomic::Ordering::SeqCst));
+        drop(first);
+        assert!(register("p1").is_some());
+    }
 
     #[test]
     fn folder_names_cannot_leave_the_projects_folder() {

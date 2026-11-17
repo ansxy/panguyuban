@@ -8,6 +8,8 @@
  * rules can move into panguyuban-core once an agent runtime is connected.
  */
 
+import { interrupt, type TeamReview } from "./team_review.ts";
+
 export type Stage =
   | "interview"
   | "prototype"
@@ -107,7 +109,7 @@ export interface Story {
 
 export interface LogEntry {
   at: number;
-  kind: "start" | "prd" | "scope" | "build" | "undo" | "engineer" | "show" | "handover" | "agents" | "design";
+  kind: "start" | "prd" | "scope" | "build" | "undo" | "engineer" | "show" | "handover" | "agents" | "design" | "review";
   text: string;
 }
 
@@ -146,6 +148,8 @@ export interface Project {
   designPending: boolean;
   /** "approved" by the user, "skipped" when the agent could not produce one, or "no" before either. */
   designStatus: "no" | "approved" | "skipped";
+  /** The team review of the PRD, once run. */
+  teamReview: TeamReview | null;
   /** Index of the interview question being asked; QUESTIONS.length = all answered. */
   interviewStep: number;
   answers: Record<string, string>;
@@ -165,6 +169,10 @@ export interface Project {
   built: boolean;
   log: LogEntry[];
   handover: string | null;
+  /** A real build in progress: the step it is on, the agent running it and the lines so far. */
+  buildRun: { storyId: string; agentId: string; steps: string[]; runId: string } | null;
+  /** The app/index.html the agent built, once a real build finished. */
+  appHtml: string | null;
 }
 
 export const LIBRARY_VERSION = "0.2.0";
@@ -247,7 +255,7 @@ function say(p: Project, from: Message["from"], text: string): Project {
   return { ...p, messages: [...p.messages, { from, text, at: now() }] };
 }
 
-function record(p: Project, kind: LogEntry["kind"], text: string): Project {
+export function record(p: Project, kind: LogEntry["kind"], text: string): Project {
   return { ...p, log: [...p.log, { at: now(), kind, text }] };
 }
 
@@ -372,6 +380,7 @@ export function createProject(
     designChanges: [],
     designPending: false,
     designStatus: "no",
+    teamReview: null,
     interviewStep: 0,
     answers: {},
     prdApproved: false,
@@ -387,6 +396,8 @@ export function createProject(
     built: false,
     log: [],
     handover: null,
+    buildRun: null,
+    appHtml: null,
   };
   const started = record(
     base,
@@ -551,6 +562,7 @@ export function agentFailed(p: Project, error: string): Project {
 /** What the agent was doing when it failed, for the error shown to the user. */
 export function failedTask(p: Project): string {
   if (p.stage === "plan") return "plan the steps";
+  if (p.stage === "build") return "build the step";
   return p.stage === "prototype" ? "make the prototype" : "answer";
 }
 
@@ -1005,7 +1017,9 @@ export function agentById(id: string | null): AgentDef | null {
 }
 
 /** What the orchestrator would pick: hard steps to the lead, small ones to the first worker. */
-export function routedAgent(story: Story): AgentDef {
+export function routedAgent(story: Story, p?: Project): AgentDef {
+  const own = p ? agentById(p.interviewAgent) : null;
+  if (own?.harness.startsWith("provider:")) return own;
   const tier: Tier = story.size === "hard" ? "lead" : "worker";
   const a = AGENTS.find((a) => a.tier === tier) ?? AGENTS[0];
   return agentById(a.id) ?? a;
@@ -1014,7 +1028,7 @@ export function routedAgent(story: Story): AgentDef {
 /** The agent that will build this step, and whether a person chose it. */
 export function agentFor(p: Project, story: Story): { agent: AgentDef; byHand: boolean } {
   const picked = p.assignMode === "manual" ? agentById(story.assignedTo) : null;
-  return picked ? { agent: picked, byHand: true } : { agent: routedAgent(story), byHand: false };
+  return picked ? { agent: picked, byHand: true } : { agent: routedAgent(story, p), byHand: false };
 }
 
 export function setAssignMode(p: Project, mode: AssignMode): Project {
@@ -1075,6 +1089,56 @@ export function buildCurrentStory(p: Project): Project {
   return say(next, "agent", `${how}. The checks pass. Look at the preview and tick each line that is true.`);
 }
 
+/** `null` keeps the simulated build (stand-in projects); otherwise the agent, or why it cannot build. */
+export function realBuild(p: Project, story: Story): { agent: AgentDef } | { blocked: string } | null {
+  if (!isLive(p)) return null;
+  const { agent } = agentFor(p, story);
+  return agent.harness.startsWith("provider:")
+    ? { agent }
+    : { blocked: `Building with ${agent.label} is not supported yet; pick a provider agent` };
+}
+
+export function startStoryBuild(p: Project, agentId: string, runId = String(now())): Project {
+  const story = currentStory(p);
+  return { ...p, agentError: null, buildRun: { storyId: story?.id ?? "", agentId, steps: [], runId } };
+}
+
+/** An update belongs to a run when no id is given or the ids match; others must not touch it. */
+const ours = (p: Project, runId?: string) => !!p.buildRun && (runId === undefined || p.buildRun.runId === runId);
+
+export function addBuildStep(p: Project, line: string, runId?: string): Project {
+  return p.buildRun && ours(p, runId) ? { ...p, buildRun: { ...p.buildRun, steps: [...p.buildRun.steps, line] } } : p;
+}
+
+const STOPPED: Record<string, string> = {
+  maxSteps: "Stopped after too many steps.",
+  timedOut: "Stopped: it took too long.",
+};
+
+export function applyStoryBuild(p: Project, r: { message: string; stopped: string | null; html: string | null }, runId?: string): Project {
+  const run = p.buildRun;
+  if (!run || !ours(p, runId)) return p;
+  if (r.stopped !== null) {
+    return { ...p, buildRun: null, appHtml: r.html ?? p.appHtml, agentError: STOPPED[r.stopped] ?? "Stopped." };
+  }
+  const agent = agentById(run.agentId);
+  let next: Project = {
+    ...p,
+    buildRun: null,
+    appHtml: r.html,
+    stories: p.stories.map((s) =>
+      s.id === run.storyId ? { ...s, status: "built" as const, builtBy: run.agentId } : s
+    ),
+  };
+  next = record(next, "build", `${run.storyId} built by ${agent?.label ?? run.agentId}.`);
+  return say(next, "agent", `${r.message} Look at the preview and tick each line that is true.`);
+}
+
+export function storyBuildFailed(p: Project, error: string, runId?: string): Project {
+  if (p.buildRun && !ours(p, runId)) return p; // a refused second build must not wipe the live run
+  return { ...p, buildRun: null, agentError: error.trim() || "The agent did not answer." };
+}
+
 /** Lines can be ticked against the prototype once it exists, and against a step once it is built. */
 export function canTick(p: Project, story: Story): boolean {
   if (p.stage === "prototype") return !!p.designHtml && !p.designPending;
@@ -1098,7 +1162,7 @@ export function canConfirmStory(p: Project): boolean {
     p.stage === "build" &&
     !!story &&
     story.status === "built" &&
-    p.checksPassing &&
+    (p.checksPassing || (p.appHtml ?? null) !== null) &&
     story.criteria.every((c) => c.done)
   );
 }
@@ -1119,6 +1183,7 @@ export function confirmStory(p: Project): Project {
 
 /** A built step can be undone until the app is handed over. */
 export function canUndo(p: Project): boolean {
+  if ((p.appHtml ?? null) !== null) return false;
   const building = p.stage === "build" || (p.stage === "handover" && p.built);
   return building && p.stories.some((s) => s.status === "confirmed");
 }
@@ -1305,13 +1370,17 @@ export function parseProjects(raw: string): Project[] {
       interviewAgent: p.interviewAgent ?? null,
       prdText: p.prdText ?? null,
       prdPath: p.prdPath ?? null,
-      agentError: p.agentError ?? null,
       planned: p.planned ?? (p.prdApproved ? "rules" : "no"),
       designHtml: p.designHtml ?? null,
       designPath: p.designPath ?? null,
       designChanges: p.designChanges ?? [],
       designPending: p.designPending ?? false,
       designStatus: p.designStatus ?? "no",
+      appHtml: p.appHtml ?? null,
+      // The run's channel died with the window; nothing will ever finish it.
+      buildRun: null,
+      agentError: p.buildRun ? "The build was interrupted. Try again." : p.agentError ?? null,
+      teamReview: p.teamReview ? interrupt(p.teamReview, Date.now()) : null,
       building: p.building ?? false,
       built: p.built ?? false,
       assignMode: p.assignMode ?? "autopilot",

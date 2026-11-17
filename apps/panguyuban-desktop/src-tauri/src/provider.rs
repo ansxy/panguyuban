@@ -6,7 +6,9 @@ use std::path::Path;
 use std::sync::OnceLock;
 use std::time::Duration;
 
-use agent_runtime::{AgentRuntime, RuntimeError};
+use agent_runtime::{
+    hooks_named, tools_named, AgentRuntime, ChatModel, ChatReply, Effective, Harness, RuntimeError, TaskRuntime, ToolCall,
+};
 use panguyuban_core::storage::SqliteStore;
 use panguyuban_core::traits::SecretStore;
 use serde::Deserialize;
@@ -136,6 +138,45 @@ pub struct OpenAiCompatRuntime {
     pub api_key: Option<String>,
 }
 
+fn failed(detail: String) -> RuntimeError {
+    RuntimeError::Failed { harness: "provider", detail }
+}
+
+fn require_model(model: Option<&str>) -> Result<&str, RuntimeError> {
+    model.filter(|m| !m.trim().is_empty()).ok_or_else(|| failed("Pick a model for this provider".into()))
+}
+
+impl OpenAiCompatRuntime {
+    /// POSTs `body` to `{base}/chat/completions`; returns the HTTP status and the reply body.
+    fn post_chat(&self, body: Value, timeout: Duration) -> Result<(reqwest::StatusCode, String), RuntimeError> {
+        let base = normalize_base(&self.base_url);
+        let mut request = client().post(format!("{base}/chat/completions")).timeout(timeout).json(&body);
+        if let Some(key) = &self.api_key {
+            request = request.bearer_auth(key);
+        }
+        // Builder commands call this from `spawn_blocking`, a plain thread outside the async
+        // workers, so blocking on the app's runtime here is allowed and cannot stall it.
+        tauri::async_runtime::block_on(async {
+            let res = request.send().await.map_err(|e| {
+                if e.is_timeout() {
+                    RuntimeError::TimedOut { harness: "provider", seconds: timeout.as_secs() }
+                } else {
+                    failed(connect_error(&base, &e))
+                }
+            })?;
+            let status = res.status();
+            let body = res.text().await.map_err(|e| failed(connect_error(&base, &e)))?;
+            Ok((status, body))
+        })
+    }
+
+    /// Servers put the reason in the body; show it, or the status when they don't.
+    fn http_error(&self, status: reqwest::StatusCode, body: &str) -> RuntimeError {
+        let detail = parse_chat(body).err().filter(|_| body.contains("\"error\""));
+        failed(detail.unwrap_or_else(|| format!("{} answered HTTP {status}", normalize_base(&self.base_url))))
+    }
+}
+
 impl AgentRuntime for OpenAiCompatRuntime {
     fn harness(&self) -> &'static str {
         "provider"
@@ -153,42 +194,99 @@ impl AgentRuntime for OpenAiCompatRuntime {
         _work_dir: &Path,
         timeout: Duration,
     ) -> Result<String, RuntimeError> {
-        let failed = |detail: String| RuntimeError::Failed { harness: "provider", detail };
-        let model = model.filter(|m| !m.trim().is_empty()).ok_or_else(|| failed("Pick a model for this provider".into()))?;
-        let base = normalize_base(&self.base_url);
-        let mut request = client()
-            .post(format!("{base}/chat/completions"))
-            .timeout(timeout)
-            .json(&json!({
+        let model = require_model(model)?;
+        let (status, body) = self.post_chat(
+            json!({
                 "model": model,
                 "messages": [
                     { "role": "system", "content": system },
                     { "role": "user", "content": prompt },
                 ],
-            }));
-        if let Some(key) = &self.api_key {
-            request = request.bearer_auth(key);
+            }),
+            timeout,
+        )?;
+        if !status.is_success() {
+            return Err(self.http_error(status, &body));
         }
-        // Builder commands call this from `spawn_blocking`, a plain thread outside the async
-        // workers, so blocking on the app's runtime here is allowed and cannot stall it.
-        tauri::async_runtime::block_on(async {
-            let res = request.send().await.map_err(|e| {
-                if e.is_timeout() {
-                    RuntimeError::TimedOut { harness: "provider", seconds: timeout.as_secs() }
-                } else {
-                    failed(connect_error(&base, &e))
-                }
-            })?;
-            let status = res.status();
-            let body = res.text().await.map_err(|e| failed(connect_error(&base, &e)))?;
-            if !status.is_success() {
-                // Servers put the reason in the body; show it, or the status when they don't.
-                let detail = parse_chat(&body).err().filter(|_| body.contains("\"error\""));
-                return Err(failed(detail.unwrap_or_else(|| format!("{base} answered HTTP {status}"))));
-            }
-            parse_chat(&body).map_err(failed)
-        })
+        parse_chat(&body).map_err(failed)
     }
+}
+
+impl ChatModel for OpenAiCompatRuntime {
+    fn chat(&self, messages: &[Value], tools: &Value, model: Option<&str>, timeout: Duration) -> Result<ChatReply, RuntimeError> {
+        let model = require_model(model)?;
+        let mut payload = json!({ "model": model, "messages": messages, "tools": tools });
+        // Some APIs reject an empty tools list with a 400 about tools.
+        if tools.as_array().is_some_and(|t| t.is_empty()) {
+            payload.as_object_mut().unwrap().remove("tools");
+        }
+        let (status, body) = self.post_chat(payload, timeout)?;
+        if !status.is_success() {
+            if matches!(status.as_u16(), 400 | 404 | 422) && body.to_lowercase().contains("tool") {
+                return Err(failed("This model or provider does not support tools; pick another model".into()));
+            }
+            return Err(self.http_error(status, &body));
+        }
+        parse_tool_reply(&body).map_err(failed)
+    }
+}
+
+/// `choices[0].message` as text plus tool calls. Unlike `parse_chat`, empty text is fine when
+/// the model called tools; no text and no calls is an error.
+fn parse_tool_reply(body: &str) -> Result<ChatReply, String> {
+    let json: Value = serde_json::from_str(body).map_err(|_| "The server's reply was not JSON".to_string())?;
+    if let Some(message) = json.pointer("/error/message").and_then(Value::as_str) {
+        return Err(message.to_string());
+    }
+    let message = json.pointer("/choices/0/message");
+    let text = message.and_then(|m| m.get("content")).and_then(Value::as_str).unwrap_or("").trim().to_string();
+    let tool_calls: Vec<ToolCall> = message
+        .and_then(|m| m.get("tool_calls"))
+        .and_then(Value::as_array)
+        .map(|calls| {
+            calls
+                .iter()
+                .filter_map(|c| {
+                    let arguments = c.pointer("/function/arguments").and_then(Value::as_str).unwrap_or("").trim();
+                    Some(ToolCall {
+                        id: c.get("id")?.as_str()?.to_string(),
+                        name: c.pointer("/function/name")?.as_str()?.to_string(),
+                        arguments: if arguments.is_empty() { "{}".into() } else { arguments.into() },
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    if text.is_empty() && tool_calls.is_empty() {
+        return Err("The model returned an empty reply".into());
+    }
+    Ok(ChatReply { text, tool_calls })
+}
+
+fn unsupported(label: &str) -> String {
+    format!("Building with {label} is not supported yet; pick a provider agent")
+}
+
+fn saved_runtime(store: &SqliteStore, id: &str) -> Result<OpenAiCompatRuntime, String> {
+    let saved = store
+        .get_app_data("providers")
+        .map_err(|e| e.to_string())?
+        .and_then(|json| serde_json::from_str::<Vec<SavedProvider>>(&json).ok())
+        .and_then(|list| list.into_iter().find(|p| p.id == id))
+        .ok_or("That provider is no longer saved. Add it again in Settings")?;
+    Ok(OpenAiCompatRuntime { base_url: saved.base_url, api_key: key_for(id)? })
+}
+
+/// The tool-calling runtime for a task: only saved providers can drive it.
+pub fn task_runtime_for(store: &SqliteStore, harness: &str, label: &str, effective: &Effective) -> Result<Box<dyn TaskRuntime>, String> {
+    let Some(id) = harness.strip_prefix(HARNESS_PREFIX) else {
+        return Err(unsupported(label));
+    };
+    Ok(Box::new(Harness {
+        chat: Box::new(saved_runtime(store, id)?),
+        tools: tools_named(&effective.tools),
+        hooks: hooks_named(&effective.hooks),
+    }))
 }
 
 /// The runtime for a harness string: `provider:<id>` from the saved list and keychain,
@@ -197,13 +295,7 @@ pub fn runtime_for(store: &SqliteStore, harness: &str) -> Result<Box<dyn AgentRu
     let Some(id) = harness.strip_prefix(HARNESS_PREFIX) else {
         return agent_runtime::runtime_for(harness).map_err(|e| e.to_string());
     };
-    let saved = store
-        .get_app_data("providers")
-        .map_err(|e| e.to_string())?
-        .and_then(|json| serde_json::from_str::<Vec<SavedProvider>>(&json).ok())
-        .and_then(|list| list.into_iter().find(|p| p.id == id))
-        .ok_or("That provider is no longer saved. Add it again in Settings")?;
-    Ok(Box::new(OpenAiCompatRuntime { base_url: saved.base_url, api_key: key_for(id)? }))
+    Ok(Box::new(saved_runtime(store, id)?))
 }
 
 #[cfg(test)]
@@ -245,6 +337,27 @@ mod tests {
         assert_eq!(parse_chat(r#"{"error":{"message":"no credits"}}"#).unwrap_err(), "no credits");
         assert!(parse_chat(r#"{"choices":[]}"#).is_err());
         assert!(parse_chat("nope").is_err());
+    }
+
+    #[test]
+    fn tool_replies_are_parsed() {
+        let calls = r#"{"choices":[{"message":{"role":"assistant","content":null,"tool_calls":[
+            {"id":"c1","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"prd.md\"}"}}]}}]}"#;
+        let r = parse_tool_reply(calls).unwrap();
+        assert_eq!(r.text, "");
+        assert_eq!((r.tool_calls[0].id.as_str(), r.tool_calls[0].name.as_str()), ("c1", "read_file"));
+        let text = parse_tool_reply(r#"{"choices":[{"message":{"content":"Built S1"}}]}"#).unwrap();
+        assert!(text.tool_calls.is_empty());
+        assert_eq!(text.text, "Built S1");
+        assert!(parse_tool_reply(r#"{"error":{"message":"no credits"}}"#).unwrap_err().contains("no credits"));
+        let bare = r#"{"choices":[{"message":{"content":"","tool_calls":[{"id":"c2","function":{"name":"list_files","arguments":" "}}]}}]}"#;
+        assert_eq!(parse_tool_reply(bare).unwrap().tool_calls[0].arguments, "{}");
+        assert_eq!(parse_tool_reply(r#"{"choices":[{"message":{"content":null}}]}"#).unwrap_err(), "The model returned an empty reply");
+    }
+
+    #[test]
+    fn only_providers_can_build() {
+        assert_eq!(unsupported("Claude lead"), "Building with Claude lead is not supported yet; pick a provider agent");
     }
 
     #[test]

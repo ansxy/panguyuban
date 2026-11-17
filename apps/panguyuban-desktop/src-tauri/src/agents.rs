@@ -41,6 +41,9 @@ pub struct AgentSession {
     pub harness: &'static str,
     pub session_id: String,
     pub pid: i32,
+    /// The process group the agent runs in. A terminal pane's foreground group, so the
+    /// app can tell which pane an agent runs in even when `pid` is a child process.
+    pub pgid: i32,
     pub cwd: String,
     pub name: String,
     /// "busy", "waiting" or "idle"
@@ -221,6 +224,7 @@ impl AgentTracker {
                     harness: "antigravity",
                     session_id: id,
                     pid,
+                    pgid: process_group(pid),
                     name: folder_name(&cwd),
                     cwd,
                     status,
@@ -368,6 +372,7 @@ fn claude_sessions(
             status_since_ms: s.status_updated_at.unwrap_or(s.started_at),
             started_ms: s.started_at,
             pid: s.pid,
+            pgid: process_group(s.pid),
             cwd: s.cwd,
             model,
             input_tokens,
@@ -735,6 +740,16 @@ fn pid_alive(pid: i32) -> bool {
     pid > 0
         && (unsafe { libc::kill(pid, 0) } == 0
             || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM))
+}
+
+#[cfg(unix)]
+fn process_group(pid: i32) -> i32 {
+    unsafe { libc::getpgid(pid) }.max(0)
+}
+
+#[cfg(not(unix))]
+fn process_group(_pid: i32) -> i32 {
+    0
 }
 
 #[cfg(not(unix))]

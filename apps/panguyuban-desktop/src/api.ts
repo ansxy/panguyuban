@@ -1,3 +1,5 @@
+import { Channel } from "@tauri-apps/api/core";
+
 export type TicketState =
   | "Backlog"
   | "Todo"
@@ -293,6 +295,8 @@ export interface AgentSession {
   harness: "claude" | "antigravity";
   session_id: string;
   pid: number;
+  /** The process group it runs in; matches a terminal pane's foreground group. */
+  pgid: number;
   cwd: string;
   name: string;
   status: AgentStatus;
@@ -439,6 +443,37 @@ export async function builderPlan(args: {
   throw new Error("A real agent needs the desktop app");
 }
 
+export type ReviewRole = "engineer" | "ux" | "qa" | "contrarian" | "leader";
+
+export interface Finding {
+  severity: "blocker" | "suggestion";
+  step: string | null;
+  text: string;
+}
+
+export interface RoleReview {
+  role: ReviewRole;
+  findings: Finding[];
+  verdict: string;
+  fixes: string;
+}
+
+/** Runs one reviewer's turn over the PRD. Nothing is saved. */
+export async function builderReviewStep(args: {
+  projectId: string;
+  projectName: string;
+  harness: string;
+  model: string | null;
+  role: ReviewRole;
+  prd: string;
+  earlier: RoleReview[];
+}): Promise<RoleReview> {
+  if (window.__TAURI_INTERNALS__?.invoke) {
+    return window.__TAURI_INTERNALS__.invoke<RoleReview>("builder_review_step", { args });
+  }
+  throw new Error("A real agent needs the desktop app");
+}
+
 export interface DesignResult {
   message: string;
   html: string;
@@ -491,6 +526,8 @@ export function termClose(id: number): Promise<void> {
 export interface TermInfo {
   command: string;
   cwd: string;
+  /** The foreground process group, to tell which agent runs in the pane. */
+  pgid: number;
 }
 
 /** The pane's foreground program and folder, for its header. */
@@ -680,6 +717,80 @@ export function memoryRemove(target: string): Promise<MemoryTarget> {
 export async function agentClis(): Promise<{ id: string; available: boolean }[]> {
   if (window.__TAURI_INTERNALS__?.invoke) {
     return window.__TAURI_INTERNALS__.invoke<{ id: string; available: boolean }[]>("agent_clis");
+  }
+  return [];
+}
+
+export type TaskEvent =
+  | { kind: "step"; tool: string; summary: string; ok: boolean }
+  | { kind: "message"; text: string };
+
+export interface BuildStoryResult {
+  message: string;
+  steps: number;
+  stopped: null | "maxSteps" | "timedOut" | "cancelled";
+  html: string | null;
+}
+
+/** Has the agent build one step into app/index.html, streaming each tool step as it happens. */
+export async function builderBuildStory(
+  args: {
+    projectId: string;
+    projectName: string;
+    harness: string;
+    agentLabel: string;
+    model: string | null;
+    prd: string;
+    storyId: string;
+  },
+  onEvent: (e: TaskEvent) => void
+): Promise<BuildStoryResult> {
+  if (window.__TAURI_INTERNALS__?.invoke) {
+    const channel = new Channel<TaskEvent>();
+    channel.onmessage = onEvent;
+    return window.__TAURI_INTERNALS__.invoke<BuildStoryResult>("builder_build_story", { args, onEvent: channel });
+  }
+  throw new Error("Building needs the desktop app");
+}
+
+/** Stops the build running for this project; false when none was running. */
+export async function builderStopBuild(projectId: string): Promise<boolean> {
+  if (window.__TAURI_INTERNALS__?.invoke) {
+    return window.__TAURI_INTERNALS__.invoke<boolean>("builder_stop_build", { projectId });
+  }
+  return false;
+}
+
+export interface HarnessSessionView {
+  session: {
+    id: string;
+    labelEn: string;
+    writePaths: string[];
+    tools: string[];
+    hooks: string[];
+    maxSteps: number;
+    timeoutMinutes: number;
+  };
+  tools: string[];
+  hooks: string[];
+  maxSteps: number;
+  timeoutMinutes: number;
+}
+
+export async function builderHarnessSettings(): Promise<HarnessSessionView[]> {
+  if (window.__TAURI_INTERNALS__?.invoke) {
+    return window.__TAURI_INTERNALS__.invoke<HarnessSessionView[]>("builder_harness_settings");
+  }
+  return [];
+}
+
+/** `null` resets the session to the registry values. */
+export async function builderSaveHarnessSettings(
+  sessionId: string,
+  settings: { tools: string[]; hooks: string[]; maxSteps: number; timeoutMinutes: number } | null,
+): Promise<HarnessSessionView[]> {
+  if (window.__TAURI_INTERNALS__?.invoke) {
+    return window.__TAURI_INTERNALS__.invoke<HarnessSessionView[]>("builder_save_harness_settings", { sessionId, settings });
   }
   return [];
 }

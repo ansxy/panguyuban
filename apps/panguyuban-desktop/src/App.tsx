@@ -23,8 +23,10 @@ import {
 } from "./api";
 import { DiffFiles, FilterTabs, Icon, type IconName, Logo } from "./ui";
 import { AgentsView, shortPath, SidebarAgents, useAgents } from "./Agents";
-import { BuilderView, useBuilder } from "./Builder";
+import { BuilderView, canTeamReview, startTeamReview, useBuilder } from "./Builder";
+import { agentById } from "./builder_flow";
 import { ProvidersSection } from "./ProvidersSettings";
+import { HarnessSection } from "./HarnessSettings";
 import { FEATURES, type FeatureKey, useFeatures } from "./features";
 import { SidebarSpaces, TerminalStages, useSpaces } from "./Spaces";
 import { FolderPanel, PanelMode } from "./FolderPanel";
@@ -146,7 +148,7 @@ export function App(): React.JSX.Element {
   const [features, setFeature] = useFeatures();
   const agents = useAgents(section === "agents", features.agents);
   const builder = useBuilder(features.prototypes);
-  const spaces = useSpaces();
+  const spaces = useSpaces(agents.sessions);
   const requests = useRequests();
   // Set by an agent's "Hand off": opens the Memory view's composer on that folder.
   const [handoffPrefill, setHandoffPrefill] = useState<HandoffPrefill | null>(null);
@@ -1277,6 +1279,21 @@ export function App(): React.JSX.Element {
             <main className="main-stage" data-focus={layout.detailFocused || undefined}>
               <AgentsView
                 agents={agents}
+                teams={features.prototypes ? builder.projects.flatMap((p) =>
+                  p.teamReview
+                    ? [{ projectId: p.id, name: p.name, agentLabel: agentById(p.interviewAgent)?.label ?? "Agent", review: p.teamReview }]
+                    : []
+                ) : []}
+                reviewable={
+                  features.prototypes
+                    ? builder.projects.filter(canTeamReview).map((p) => ({ id: p.id, name: p.name }))
+                    : []
+                }
+                onStartTeam={(id) => startTeamReview(builder, id)}
+                onOpenTeam={(id) => {
+                  builder.select(id);
+                  setSection("builder");
+                }}
                 splitter={
                   <Splitter
                     label="Resize list"
@@ -1590,6 +1607,8 @@ export function App(): React.JSX.Element {
                   </section>
 
                   <ProvidersSection />
+
+                  <HarnessSection />
 
                   <section className="settings-section">
                     <div className="settings-aside">
