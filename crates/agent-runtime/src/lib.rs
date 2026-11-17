@@ -12,6 +12,8 @@ mod claude;
 mod process;
 mod registry;
 mod review;
+mod task;
+mod tools;
 
 use std::path::Path;
 use std::time::Duration;
@@ -22,6 +24,8 @@ pub use antigravity::AntigravityRuntime;
 pub use claude::ClaudeRuntime;
 pub use registry::*;
 pub use review::*;
+pub use task::*;
+pub use tools::*;
 
 /// The interview skill and its template ship inside the binary.
 const INTERVIEW_SKILL: &str = include_str!("../../../skills/product/prd-interview/SKILL.md");
