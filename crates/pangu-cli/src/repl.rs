@@ -76,8 +76,11 @@ pub fn system_prompt(root: &Path, tools: &[String]) -> String {
 
 static CANCEL: AtomicBool = AtomicBool::new(false);
 
+/// First Ctrl-C cancels the turn (and a running command); a second one quits. Atomics and `_exit` only.
 extern "C" fn on_sigint(_: libc::c_int) {
-    CANCEL.store(true, Ordering::SeqCst);
+    if CANCEL.swap(true, Ordering::SeqCst) {
+        unsafe { libc::_exit(130) };
+    }
 }
 
 struct TtyApprover;
@@ -87,7 +90,8 @@ impl Approver for TtyApprover {
         eprintln!("  ▶ wants to run: {command}  [y] allow  [a] always here  [n] deny");
         let mut line = String::new();
         let read = std::fs::File::open("/dev/tty").map(std::io::BufReader::new).and_then(|mut r| r.read_line(&mut line));
-        if read.is_err() {
+        // ponytail: the read restarts after Ctrl-C, so the deny lands on Enter (or a second Ctrl-C quits).
+        if read.is_err() || CANCEL.load(Ordering::SeqCst) {
             return Approval::Deny;
         }
         match line.trim().chars().next() {
@@ -129,6 +133,7 @@ fn setup(args: &[String]) -> Result<(Session, Choice, Harness, Task), String> {
             ctx.always_allowed,
             Box::new(remember),
             Duration::from_secs(600),
+            &CANCEL,
         )));
     }
     let chat = OpenAiCompat { base_url: choice.provider.base_url.clone(), api_key: provider_key(&choice.provider.id)? };
@@ -161,7 +166,7 @@ pub fn run(args: &[String]) -> i32 {
             return 1;
         }
     };
-    // Ctrl-C cancels the running turn (checked between steps); at the prompt it does nothing.
+    // Ctrl-C cancels the running turn and kills a running command; a second Ctrl-C quits.
     unsafe { libc::signal(libc::SIGINT, on_sigint as extern "C" fn(libc::c_int) as libc::sighandler_t) };
     println!("Panguyuban agent · {} · {} · {}", choice.provider.name, choice.model, session.root.display());
     let mut conversation = Conversation::new();

@@ -3,6 +3,7 @@
 use std::io::Read;
 use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -13,6 +14,8 @@ use crate::tools::{definition, str_arg};
 use crate::{Tool, ToolResult, Workspace};
 
 const GRACE: Duration = Duration::from_millis(1500);
+/// The most output kept per command; the rest is read and dropped.
+const OUTPUT_KEEP: usize = 1 << 20;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Approval {
@@ -30,11 +33,19 @@ pub struct RunCommand {
     allowed: Mutex<Vec<String>>,
     remember: Box<dyn Fn(&str) + Send + Sync>,
     timeout: Duration,
+    /// Set (e.g. by Ctrl-C) to stop the running command and its whole process group.
+    cancel: &'static AtomicBool,
 }
 
 impl RunCommand {
-    pub fn new(approver: Box<dyn Approver>, always_allowed: Vec<String>, remember: Box<dyn Fn(&str) + Send + Sync>, timeout: Duration) -> RunCommand {
-        RunCommand { approver, allowed: Mutex::new(always_allowed), remember, timeout }
+    pub fn new(
+        approver: Box<dyn Approver>,
+        always_allowed: Vec<String>,
+        remember: Box<dyn Fn(&str) + Send + Sync>,
+        timeout: Duration,
+        cancel: &'static AtomicBool,
+    ) -> RunCommand {
+        RunCommand { approver, allowed: Mutex::new(always_allowed), remember, timeout, cancel }
     }
 }
 
@@ -76,9 +87,20 @@ impl Tool for RunCommand {
         };
         let (tx, rx) = mpsc::channel::<Vec<u8>>();
         std::thread::spawn(move || {
-            let mut chunk = [0u8; 4096];
+            let (mut chunk, mut kept, mut cut) = ([0u8; 4096], 0, false);
             while let Ok(n) = reader.read(&mut chunk) {
-                if n == 0 || tx.send(chunk[..n].to_vec()).is_err() {
+                if n == 0 {
+                    break;
+                }
+                // Keep the first OUTPUT_KEEP bytes but keep draining, so the command never blocks on a full pipe.
+                let take = n.min(OUTPUT_KEEP - kept);
+                kept += take;
+                let mut keep = chunk[..take].to_vec();
+                if take < n && !cut {
+                    cut = true;
+                    keep.extend_from_slice(b"\n[output cut]\n");
+                }
+                if !keep.is_empty() && tx.send(keep).is_err() {
                     break;
                 }
             }
@@ -86,17 +108,20 @@ impl Tool for RunCommand {
         let start = Instant::now();
         let code = loop {
             match child.try_wait() {
-                Ok(Some(status)) => break Some(status.code().unwrap_or(-1)),
+                Ok(Some(status)) => break Ok(status.code().unwrap_or(-1)),
+                Ok(None) if self.cancel.load(Ordering::SeqCst) => break Err("cancelled".to_string()),
                 Ok(None) if start.elapsed() >= self.timeout => {
-                    // Only the timeout path kills the whole group; a background child left by a normal exit is kept.
-                    unsafe { libc::kill(-(child.id() as i32), libc::SIGKILL) };
-                    let _ = child.wait();
-                    break None;
+                    break Err(format!("timed out after {} s", self.timeout.as_secs()))
                 }
                 Ok(None) => std::thread::sleep(Duration::from_millis(20)),
-                Err(_) => break Some(-1),
+                Err(_) => break Ok(-1),
             }
         };
+        if code.is_err() {
+            // Only a stopped command kills the whole group; a background child left by a normal exit is kept.
+            unsafe { libc::kill(-(child.id() as i32), libc::SIGKILL) };
+            let _ = child.wait();
+        }
         // Collect output until EOF, but give up after a grace period: a background child may hold the pipe open.
         let grace = Instant::now() + GRACE;
         let mut buf = Vec::new();
@@ -108,11 +133,8 @@ impl Tool for RunCommand {
         }
         let out = String::from_utf8_lossy(&buf).into_owned();
         match code {
-            Some(n) => ToolResult { ok: n == 0, summary: format!("ran `{cmd}` (exit {n})"), output: format!("exit code {n}\n{out}") },
-            None => {
-                let secs = self.timeout.as_secs();
-                ToolResult::refused(format!("`{cmd}` timed out"), format!("timed out after {secs} s\n{out}"))
-            }
+            Ok(n) => ToolResult { ok: n == 0, summary: format!("ran `{cmd}` (exit {n})"), output: format!("exit code {n}\n{out}") },
+            Err(why) => ToolResult::refused(format!("stopped `{cmd}`: {why}"), format!("{why}\n{out}")),
         }
     }
 }
@@ -120,6 +142,7 @@ impl Tool for RunCommand {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::AtomicBool;
     use std::sync::Arc;
 
     struct Fixed(Approval, Arc<Mutex<u32>>);
@@ -131,11 +154,14 @@ mod tests {
     }
 
     fn tool(a: Approval, allowed: &[&str], secs: u64) -> (RunCommand, Arc<Mutex<u32>>, Arc<Mutex<Vec<String>>>, tempfile::TempDir, Workspace) {
+        tool_with(a, allowed, secs, Box::leak(Box::new(AtomicBool::new(false))))
+    }
+    fn tool_with(a: Approval, allowed: &[&str], secs: u64, cancel: &'static AtomicBool) -> (RunCommand, Arc<Mutex<u32>>, Arc<Mutex<Vec<String>>>, tempfile::TempDir, Workspace) {
         let asked = Arc::new(Mutex::new(0));
         let kept = Arc::new(Mutex::new(vec![]));
         let k = kept.clone();
         let t = RunCommand::new(Box::new(Fixed(a, asked.clone())), allowed.iter().map(|s| s.to_string()).collect(),
-            Box::new(move |c| k.lock().unwrap().push(c.to_string())), Duration::from_secs(secs));
+            Box::new(move |c| k.lock().unwrap().push(c.to_string())), Duration::from_secs(secs), cancel);
         let dir = tempfile::tempdir().unwrap();
         let ws = Workspace::new(dir.path(), &["*".to_string()]).unwrap();
         (t, asked, kept, dir, ws)
@@ -206,5 +232,28 @@ mod tests {
         assert!(!r.ok && r.output.contains("exit code 3"));
         let r = go(&t, &ws, "sleep 5");
         assert!(!r.ok && r.output.contains("timed out after 1 s"));
+    }
+
+    #[test]
+    fn cancel_kills_a_running_command() {
+        let cancel: &'static AtomicBool = Box::leak(Box::new(AtomicBool::new(false)));
+        let (t, _, _, _d, ws) = tool_with(Approval::Once, &[], 60, cancel);
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(300));
+            cancel.store(true, std::sync::atomic::Ordering::SeqCst);
+        });
+        let start = Instant::now();
+        let r = go(&t, &ws, "echo started; sleep 30");
+        assert!(start.elapsed() < Duration::from_secs(4));
+        assert!(!r.ok && r.output.contains("cancelled") && r.output.contains("started"), "{r:?}");
+    }
+
+    #[test]
+    fn huge_output_is_cut_but_drained() {
+        let (t, _, _, _d, ws) = tool(Approval::Once, &[], 30);
+        let r = go(&t, &ws, "head -c 3000000 /dev/zero | tr '\\0' a; echo after");
+        assert!(r.ok, "{}", r.summary);
+        assert!(r.output.contains("[output cut]"));
+        assert!(r.output.len() < (1 << 20) + 100);
     }
 }
