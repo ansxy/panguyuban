@@ -29,6 +29,15 @@ fn main() {
 }
 
 #[cfg(unix)]
+const USAGE: &str = "\
+usage:
+  pangu                                  start the agent in this folder
+  pangu --provider <name> --model <id>   start it with this provider and model
+  pangu claude [args]                    Claude Code with Panguyuban skills and guard rails
+  pangu allow <command>                  always allow a command in this folder
+";
+
+#[cfg(unix)]
 fn agent_arg(args: &[String]) -> Option<Agent> {
     match args.iter().position(|a| a == "--agent").and_then(|i| args.get(i + 1)).map(String::as_str) {
         Some("claude") => Some(Agent::Claude),
@@ -91,22 +100,28 @@ fn main() {
         }
         Some("claude") => exit(claude::run(&args[1..])),
         Some("allow") => {
-            let Some(command) = args.get(1) else {
-                eprintln!("usage: pangu allow \"<command>\"");
+            let command = args[1..].join(" ");
+            if command.trim().is_empty() {
+                eprintln!("usage: pangu allow <command>");
                 exit(2);
-            };
+            }
             let root = Session::from_env()
                 .ok()
                 .flatten()
                 .map(|s| s.root)
                 .unwrap_or_else(|| session::find_root(&std::env::current_dir().unwrap_or_default()));
-            match session::open_store().and_then(|st| session::remember_command(&st, &root, command)) {
+            match session::open_store().and_then(|st| session::remember_command(&st, &root, &command)) {
                 Ok(()) => println!("Always allowed in {}: {command}", root.display()),
                 Err(e) => {
                     eprintln!("pangu allow failed: {e}");
                     exit(1);
                 }
             }
+        }
+        _ if args.iter().any(|a| a == "--help" || a == "-h") => print!("{USAGE}"),
+        Some(other) if !other.starts_with('-') => {
+            eprint!("pangu: unknown command \"{other}\"\n\n{USAGE}");
+            exit(2);
         }
         _ => exit(repl::run(&args)),
     }
