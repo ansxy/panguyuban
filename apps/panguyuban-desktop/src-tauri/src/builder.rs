@@ -302,12 +302,21 @@ pub fn load_harness_settings(store: &SqliteStore) -> HashMap<String, HarnessSett
         .unwrap_or_default()
 }
 
+/// Step ids become part of the run-record file name, so only plain characters pass.
+fn check_story_id(id: &str) -> Result<(), String> {
+    if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
+        return Err(format!("{id} is not a step id"));
+    }
+    Ok(())
+}
+
 /// Builds one PRD step into app/index.html with the harness.
 pub fn run_build_story(
     store: &SqliteStore,
     args: BuildStoryArgs,
     on_event: &dyn Fn(TaskEvent),
 ) -> Result<BuildStoryResult, String> {
+    check_story_id(&args.story_id)?;
     let dir = project_dir(&args.project_name, &args.project_id);
     std::fs::create_dir_all(dir.join("app")).map_err(|e| format!("Could not create {}: {e}", dir.display()))?;
     let app = dir.join("app").join("index.html");
@@ -407,6 +416,14 @@ fn folder_name(name: &str, id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn story_ids_cannot_leave_the_runs_folder() {
+        assert!(check_story_id("S1").is_ok() && check_story_id("story_2-a").is_ok());
+        for bad in ["../../x", "S1/x", "", "a.b", "a\\b"] {
+            assert_eq!(check_story_id(bad).unwrap_err(), format!("{bad} is not a step id"));
+        }
+    }
 
     #[test]
     fn one_build_per_project() {
