@@ -1,5 +1,8 @@
-//! Links the bundled `pangu` binary onto PATH.
+//! Links the bundled pangu binary onto PATH as `pangu`.
 use std::path::{Path, PathBuf};
+
+/// The sidecar's name inside the app. Not `pangu`, so Tauri's copy never lands on `target/<profile>/pangu`.
+const BUNDLED: &str = "pangu-cli";
 
 const BIN_DIRS: [&str; 2] = ["/opt/homebrew/bin", "/usr/local/bin"];
 
@@ -32,7 +35,7 @@ pub fn link_into(dir: &Path, source: &Path) -> Result<PathBuf, String> {
 }
 
 fn bundled() -> Option<PathBuf> {
-    std::env::current_exe().ok()?.parent().map(|d| d.join("pangu")).filter(|p| p.exists())
+    std::env::current_exe().ok()?.parent().map(|d| d.join(BUNDLED)).filter(|p| p.exists())
 }
 
 #[tauri::command]
@@ -58,7 +61,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("pangu-link-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let (a, b) = (dir.join("a"), dir.join("b"));
+        let (a, b) = (dir.join(BUNDLED), dir.join("b"));
         std::fs::write(&a, "a").unwrap();
         std::fs::write(&b, "b").unwrap();
         let bin = dir.join("bin");

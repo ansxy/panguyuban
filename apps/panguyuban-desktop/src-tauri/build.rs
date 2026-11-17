@@ -1,8 +1,8 @@
 fn main() {
-    // externalBin needs binaries/pangu-<triple> to exist even for plain cargo builds and tests;
+    // externalBin needs binaries/pangu-cli-<triple> to exist even for plain cargo builds and tests;
     // scripts/build-pangu.sh stages the real one. Never overwrite an existing file.
     let triple = std::env::var("TARGET").unwrap();
-    let path = std::path::Path::new("binaries").join(format!("pangu-{triple}"));
+    let path = std::path::Path::new("binaries").join(format!("pangu-cli-{triple}"));
     if !path.exists() {
         std::fs::create_dir_all("binaries").unwrap();
         std::fs::write(&path, "#!/bin/sh\necho 'pangu was not built; run scripts/build-pangu.sh' >&2\nexit 1\n").unwrap();

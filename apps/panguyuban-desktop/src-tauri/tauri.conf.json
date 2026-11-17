@@ -36,6 +36,6 @@
       "icons/icon.ico"
     ],
     "category": "DeveloperTool",
-    "externalBin": ["binaries/pangu"]
+    "externalBin": ["binaries/pangu-cli"]
   }
 }

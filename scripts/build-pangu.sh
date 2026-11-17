@@ -11,4 +11,4 @@ cargo build -p pangu-cli $flag
 triple="$(rustc -vV | sed -n 's/^host: //p')"
 dest="$root/apps/panguyuban-desktop/src-tauri/binaries"
 mkdir -p "$dest"
-cp "target/$profile/pangu" "$dest/pangu-$triple"
+cp "target/$profile/pangu" "$dest/pangu-cli-$triple"
