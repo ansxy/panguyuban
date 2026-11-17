@@ -48,6 +48,21 @@ timeout_minutes    = 15
 status             = "ready"
 
 [[session_type]]
+id                 = "work-on-project"
+label_en           = "Work on a project"
+label_id           = "Kerjakan proyek"
+skill              = "work-on-project"
+engineering_skills = ["*"]
+phase              = "build"
+write_paths        = ["*"]
+shell              = true
+tools              = ["read_file", "list_files", "search", "write_file", "edit_file", "run_command"]
+hooks              = []
+max_steps          = 200
+timeout_minutes    = 60
+status             = "ready"
+
+[[session_type]]
 id                 = "change-request"
 label_en           = "Change something"
 label_id           = "Ubah sesuatu"

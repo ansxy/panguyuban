@@ -132,6 +132,13 @@ mod tests {
 
     #[test]
     fn only_sessions_with_tools_use_the_harness() {
-        assert_eq!(harness_sessions().iter().map(|s| s.id.as_str()).collect::<Vec<_>>(), ["build-next-story"]);
+        assert_eq!(harness_sessions().iter().map(|s| s.id.as_str()).collect::<Vec<_>>(), ["build-next-story", "work-on-project"]);
+    }
+
+    #[test]
+    fn work_on_project_is_a_harness_session() {
+        let s = session_type("work-on-project").unwrap();
+        assert!(harness_sessions().iter().any(|h| h.id == "work-on-project"));
+        assert_eq!(effective(&s, None).max_steps, 200);
     }
 }

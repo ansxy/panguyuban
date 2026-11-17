@@ -51,17 +51,7 @@ impl Workspace {
     /// Writes a file the task may write, creating parent folders after the checks pass.
     pub fn write(&self, rel: &str, content: &str) -> Result<(), String> {
         let full = self.resolve(rel)?;
-        let normal: Vec<_> = Path::new(rel)
-            .components()
-            .filter_map(|c| match c {
-                Component::Normal(s) => Some(s.to_string_lossy().into_owned()),
-                _ => None,
-            })
-            .collect();
-        let normal = normal.join("/");
-        if !self.write_paths.iter().any(|w| w == "*" || *w == normal) {
-            return Err(format!("writing {rel} is not allowed; you can write: {}", self.write_paths.join(", ")));
-        }
+        self.check_write(rel)?;
         if std::fs::symlink_metadata(&full).is_ok_and(|m| m.file_type().is_symlink()) {
             return Err(format!("writing {rel} is not allowed: it is a symbolic link"));
         }
@@ -69,6 +59,25 @@ impl Workspace {
             std::fs::create_dir_all(parent).map_err(|e| format!("cannot create folder for {rel}: {e}"))?;
         }
         std::fs::write(&full, content).map_err(|e| format!("cannot write {rel}: {e}"))
+    }
+
+    /// Whether `rel` may be written: never inside `.git`, otherwise only the allowed paths.
+    pub fn check_write(&self, rel: &str) -> Result<(), String> {
+        let normal: Vec<_> = Path::new(rel)
+            .components()
+            .filter_map(|c| match c {
+                Component::Normal(s) => Some(s.to_string_lossy().into_owned()),
+                _ => None,
+            })
+            .collect();
+        if normal.first().is_some_and(|c| c.eq_ignore_ascii_case(".git")) {
+            return Err("the .git folder is off limits".into());
+        }
+        let normal = normal.join("/");
+        if !self.write_paths.iter().any(|w| w == "*" || *w == normal) {
+            return Err(format!("writing {rel} is not allowed; you can write: {}", self.write_paths.join(", ")));
+        }
+        Ok(())
     }
 
     /// Path of `full` relative to the root, with forward slashes.
@@ -374,6 +383,15 @@ mod tests {
         let r = run(&ws, "write_file", json!({"path":"app/index.html","content":"x"}));
         assert!(!r.ok && r.output.contains("symbolic link"));
         assert_eq!(fs::read_to_string(d.path().join("prd.md")).unwrap(), "spec");
+    }
+
+    #[test]
+    fn git_is_off_limits_even_with_star() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = Workspace::new(dir.path(), &["*".to_string()]).unwrap();
+        let err = ws.write(".git/config", "x").unwrap_err();
+        assert!(err.contains("off limits"));
+        assert!(!dir.path().join(".git").exists());
     }
 
     #[test]
