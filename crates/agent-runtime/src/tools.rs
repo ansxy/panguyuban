@@ -51,10 +51,10 @@ impl Workspace {
     /// Writes a file the task may write, creating parent folders after the checks pass.
     pub fn write(&self, rel: &str, content: &str) -> Result<(), String> {
         let full = self.resolve(rel)?;
-        self.check_write(rel)?;
         if std::fs::symlink_metadata(&full).is_ok_and(|m| m.file_type().is_symlink()) {
             return Err(format!("writing {rel} is not allowed: it is a symbolic link"));
         }
+        self.check_write(rel)?;
         if let Some(parent) = full.parent() {
             std::fs::create_dir_all(parent).map_err(|e| format!("cannot create folder for {rel}: {e}"))?;
         }
@@ -63,17 +63,11 @@ impl Workspace {
 
     /// Whether `rel` may be written: never inside `.git`, otherwise only the allowed paths.
     pub fn check_write(&self, rel: &str) -> Result<(), String> {
-        let normal: Vec<_> = Path::new(rel)
-            .components()
-            .filter_map(|c| match c {
-                Component::Normal(s) => Some(s.to_string_lossy().into_owned()),
-                _ => None,
-            })
-            .collect();
-        if normal.first().is_some_and(|c| c.eq_ignore_ascii_case(".git")) {
+        // The canonical path, so `..` and linked folders cannot hide `.git` or the write list.
+        let normal = crate::relative_to(&self.root, rel).ok_or_else(|| format!("path is outside the project folder: {rel:?}"))?;
+        if normal.split('/').next().is_some_and(|c| c.eq_ignore_ascii_case(".git")) {
             return Err("the .git folder is off limits".into());
         }
-        let normal = normal.join("/");
         if !self.write_paths.iter().any(|w| w == "*" || *w == normal) {
             return Err(format!("writing {rel} is not allowed; you can write: {}", self.write_paths.join(", ")));
         }

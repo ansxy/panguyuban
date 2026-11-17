@@ -25,15 +25,33 @@ pub struct PolicyContext {
     pub steps_so_far: u32,
 }
 
-/// An absolute path inside `root` made relative (forward slashes); a relative path as is;
-/// an absolute path outside `root` is `None`.
+/// The path inside `root`, as a canonical relative path with forward slashes.
+/// Relative input is taken from `root`; `..` and symlinks are resolved on the way, so the
+/// result is where a write would really land. `None` when it lands outside `root` or is `root`.
 pub fn relative_to(root: &Path, path: &str) -> Option<String> {
+    use std::path::Component;
+    let root = root.canonicalize().ok()?;
     let p = Path::new(path);
-    if !p.is_absolute() {
-        return Some(path.to_string());
+    let mut cur = if p.is_absolute() { std::path::PathBuf::new() } else { root.clone() };
+    for c in p.components() {
+        match c {
+            Component::Prefix(_) => return None,
+            Component::RootDir => cur.push("/"),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                cur.pop();
+            }
+            Component::Normal(n) => {
+                cur.push(n);
+                // Once a part does not exist nothing below it can be a link. A dangling link fails here.
+                if std::fs::symlink_metadata(&cur).is_ok() {
+                    cur = cur.canonicalize().ok()?;
+                }
+            }
+        }
     }
-    let rel = p.strip_prefix(root).ok()?;
-    Some(rel.to_string_lossy().replace('\\', "/"))
+    let rel = cur.strip_prefix(&root).ok()?.to_string_lossy().replace('\\', "/");
+    (!rel.is_empty()).then_some(rel)
 }
 
 pub fn decide(ctx: &PolicyContext, action: &Action) -> Decision {
@@ -141,5 +159,46 @@ mod tests {
     fn unknown_tools_ask() {
         let (_d, c) = ctx(None, 0);
         assert_eq!(decide(&c, &Action::Other("TodoWrite".into())), Decision::Ask("unknown tool".into()));
+    }
+
+    #[test]
+    fn dot_dot_cannot_hide_git_or_leave_the_folder() {
+        let (_d, c) = ctx(None, 0);
+        let root = c.workspace.root().display().to_string();
+        std::fs::create_dir(c.workspace.root().join("src")).unwrap();
+        assert_eq!(decide(&c, &w("src/../.git/config")), Decision::Deny("the .git folder is off limits".into()));
+        assert_eq!(decide(&c, &w(&format!("{root}/src/../.git/config"))), Decision::Deny("the .git folder is off limits".into()));
+        let outside = Decision::Deny("writes outside the project are not allowed".into());
+        assert_eq!(decide(&c, &w("../x")), outside);
+        assert_eq!(decide(&c, &w(&format!("{root}/../x"))), outside);
+        let ask = Decision::Ask("reads outside the project".into());
+        assert_eq!(decide(&c, &Action::Read("../../etc/passwd".into())), ask);
+        assert_eq!(decide(&c, &Action::Read(format!("{root}/../x"))), ask);
+    }
+
+    #[test]
+    fn a_non_canonical_absolute_path_inside_the_root_is_allowed() {
+        let dir = tempfile::tempdir().unwrap(); // on macOS under /var, a link to /private/var
+        let workspace = Workspace::new(dir.path(), &["*".to_string()]).unwrap();
+        let effective = effective(&session_type("work-on-project").unwrap(), None);
+        let c = PolicyContext { workspace, effective, always_allowed: vec![], steps_so_far: 0 };
+        let abs = format!("{}/src/a.ts", dir.path().display());
+        assert_eq!(decide(&c, &w(&abs)), Decision::Allow);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_folders_are_followed() {
+        let (_d, c) = ctx(None, 0);
+        let root = c.workspace.root().to_path_buf();
+        std::fs::create_dir(root.join(".git")).unwrap();
+        std::os::unix::fs::symlink(root.join(".git"), root.join("g")).unwrap();
+        assert_eq!(decide(&c, &w("g/config")), Decision::Deny("the .git folder is off limits".into()));
+        assert!(c.workspace.write("g/config", "x").unwrap_err().contains("off limits"));
+        assert!(!root.join(".git/config").exists());
+        let other = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(other.path(), root.join("link")).unwrap();
+        assert_eq!(decide(&c, &w("link/x")), Decision::Deny("writes outside the project are not allowed".into()));
+        assert_eq!(decide(&c, &w(&format!("{}/link/x", root.display()))), Decision::Deny("writes outside the project are not allowed".into()));
     }
 }
