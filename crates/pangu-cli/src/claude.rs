@@ -1,5 +1,8 @@
 //! `pangu claude`: Claude Code with Panguyuban's skills and guard rails, passed per launch.
 
+use std::ffi::OsStr;
+use std::hash::{Hash, Hasher};
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -21,8 +24,7 @@ pub fn write_plugin(dir: &Path) -> std::io::Result<()> {
         "version": env!("CARGO_PKG_VERSION"),
     });
     std::fs::write(dir.join(".claude-plugin/plugin.json"), manifest.to_string())?;
-    let skills = std::iter::once(("work-on-project", WORK_ON_PROJECT)).chain(ENGINEERING.iter().copied());
-    for (name, text) in skills {
+    for (name, text) in plugin_skills() {
         let d = dir.join("skills").join(name);
         std::fs::create_dir_all(&d)?;
         std::fs::write(d.join("SKILL.md"), text)?;
@@ -42,12 +44,43 @@ pub fn hook_settings(pangu: &Path) -> Value {
     json!({"hooks": {"PreToolUse": entry("check"), "PostToolUse": entry("record")}})
 }
 
-fn on_path(name: &str) -> Option<PathBuf> {
-    std::env::split_paths(&std::env::var_os("PATH")?).map(|d| d.join(name)).find(|p| p.is_file())
+fn find_on_path(name: &str, path_var: &OsStr) -> Option<PathBuf> {
+    std::env::split_paths(path_var)
+        .filter(|d| d.is_absolute())
+        .map(|d| d.join(name))
+        .find(|p| p.metadata().map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0).unwrap_or(false))
+}
+
+fn plugin_skills() -> impl Iterator<Item = (&'static str, &'static str)> {
+    std::iter::once(("work-on-project", WORK_ON_PROJECT)).chain(ENGINEERING.iter().copied())
+}
+
+/// A plugin folder named by its contents, so concurrent launches never rewrite one another's.
+pub fn ensure_plugin(data: &Path) -> std::io::Result<PathBuf> {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    env!("CARGO_PKG_VERSION").hash(&mut h);
+    for skill in plugin_skills() {
+        skill.hash(&mut h);
+    }
+    let final_dir = data.join(format!("claude-plugin-{:016x}", h.finish()));
+    if final_dir.exists() {
+        return Ok(final_dir);
+    }
+    std::fs::create_dir_all(data)?;
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    let tmp = data.join(format!(".claude-plugin-tmp-{}-{nanos}", std::process::id()));
+    write_plugin(&tmp)?;
+    if let Err(e) = std::fs::rename(&tmp, &final_dir) {
+        let _ = std::fs::remove_dir_all(&tmp);
+        if !final_dir.exists() {
+            return Err(e);
+        }
+    }
+    Ok(final_dir)
 }
 
 pub fn run(args: &[String]) -> i32 {
-    let Some(claude) = on_path("claude") else {
+    let Some(claude) = std::env::var_os("PATH").and_then(|p| find_on_path("claude", &p)) else {
         eprintln!("Claude Code (claude) is not installed or not on PATH");
         return 1;
     };
@@ -64,11 +97,13 @@ pub fn run(args: &[String]) -> i32 {
         &session.record_path(),
         json!({"type": "start", "agent": "claude", "root": session.root.to_string_lossy()}),
     );
-    let plugin = session.data.join("claude-plugin");
-    if let Err(e) = write_plugin(&plugin) {
-        eprintln!("pangu claude: cannot write the plugin: {e}");
-        return 1;
-    }
+    let plugin = match ensure_plugin(&session.data) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("pangu claude: cannot write the plugin: {e}");
+            return 1;
+        }
+    };
     let mut cmd = Command::new(claude);
     cmd.arg("--settings").arg(hook_settings(&pangu).to_string()).arg("--plugin-dir").arg(&plugin).args(args);
     cmd.envs(session.env());
@@ -114,5 +149,41 @@ mod tests {
         std::fs::write(tmp.path().join("skills/old/SKILL.md"), "x").unwrap();
         write_plugin(tmp.path()).unwrap();
         assert!(!tmp.path().join("skills/old").exists());
+    }
+
+    #[test]
+    fn the_same_plugin_is_reused_and_old_ones_stay() {
+        let tmp = tempfile::tempdir().unwrap();
+        let old = tmp.path().join("claude-plugin-other");
+        std::fs::create_dir_all(&old).unwrap();
+        let a = ensure_plugin(tmp.path()).unwrap();
+        std::fs::write(a.join("marker"), "x").unwrap();
+        let b = ensure_plugin(tmp.path()).unwrap();
+        assert_eq!(a, b);
+        assert!(b.join("marker").exists());
+        assert!(old.exists());
+        assert!(a.join("skills/work-on-project/SKILL.md").exists());
+    }
+
+    fn script(dir: &Path, mode: u32) {
+        let f = dir.join("claude");
+        std::fs::write(&f, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&f, std::fs::Permissions::from_mode(mode)).unwrap();
+    }
+
+    #[test]
+    fn path_lookup_ignores_empty_entries_and_non_executables() {
+        let (a, b, cwd) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        script(cwd.path(), 0o755);
+        script(a.path(), 0o644);
+        script(b.path(), 0o755);
+        let prev = std::env::current_dir().unwrap();
+        std::env::set_current_dir(cwd.path()).unwrap();
+        let only_empty = find_on_path("claude", OsStr::new(""));
+        let joined = std::env::join_paths([a.path(), b.path()]).unwrap();
+        let found = find_on_path("claude", &joined);
+        std::env::set_current_dir(prev).unwrap();
+        assert_eq!(only_empty, None);
+        assert_eq!(found, Some(b.path().join("claude")));
     }
 }
