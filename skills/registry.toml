@@ -13,6 +13,9 @@
 #                      "handover" = closing the project.
 # write_paths        : the only paths the agent may write. "*" = the whole project.
 # shell              : whether the agent may run commands.
+# tools, hooks       : the most the agent may use. Settings can only switch off or lower.
+# max_steps          : the most model turns in one run. Settings can only lower it.
+# timeout_minutes    : the longest one run may take. Settings can only lower it.
 # status             : "ready" = the product skill exists in this library, "pending" = not yet.
 
 library_version = "0.4.0"
@@ -28,15 +31,20 @@ write_paths        = ["prd.md"]
 shell              = false
 status             = "ready"
 
+# v1 builds one static file, no commands: docs/superpowers/specs/2026-11-17-agent-harness-design.md
 [[session_type]]
 id                 = "build-next-story"
 label_en           = "Build the next step"
 label_id           = "Kerjakan langkah berikutnya"
 skill              = "build-story"
-engineering_skills = ["*"]
+engineering_skills = []
 phase              = "build"
-write_paths        = ["*"]
-shell              = true
+write_paths        = ["app/index.html"]
+shell              = false
+tools              = ["read_file", "list_files", "search", "write_file", "edit_file"]
+hooks              = ["no_external_urls"]
+max_steps          = 40
+timeout_minutes    = 15
 status             = "pending"
 
 [[session_type]]

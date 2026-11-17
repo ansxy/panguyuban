@@ -10,6 +10,7 @@
 mod antigravity;
 mod claude;
 mod process;
+mod registry;
 mod review;
 
 use std::path::Path;
@@ -19,6 +20,7 @@ use serde::{Deserialize, Serialize};
 
 pub use antigravity::AntigravityRuntime;
 pub use claude::ClaudeRuntime;
+pub use registry::*;
 pub use review::*;
 
 /// The interview skill and its template ship inside the binary.
