@@ -83,7 +83,7 @@ type AgentsState = ReturnType<typeof useAgents>;
 type StatusFilter = "all" | AgentStatus;
 type Harness = "claude" | "antigravity";
 
-const STATUS: Record<AgentStatus, { glyph: string; label: string; rank: number }> = {
+export const STATUS: Record<AgentStatus, { glyph: string; label: string; rank: number }> = {
   waiting: { glyph: "◆", label: "Needs you", rank: 0 },
   busy: { glyph: "●", label: "Working", rank: 1 },
   idle: { glyph: "○", label: "Idle", rank: 2 },
@@ -395,7 +395,17 @@ function StartTeam({
 }
 
 /** Sidebar "Agents" section: sessions grouped by status; click opens one in the Agents view. */
-export function SidebarAgents({ agents, onOpen }: { agents: AgentsState; onOpen: (sessionId: string) => void }) {
+export function SidebarAgents({
+  agents,
+  onOpen,
+  hidden,
+  onToggle,
+}: {
+  agents: AgentsState;
+  onOpen: (sessionId: string) => void;
+  hidden: boolean;
+  onToggle: () => void;
+}) {
   const now = useNow(5_000);
   const groups = (["waiting", "busy", "idle"] as const)
     .map((status) => ({
@@ -405,9 +415,11 @@ export function SidebarAgents({ agents, onOpen }: { agents: AgentsState; onOpen:
     .filter((g) => g.sessions.length > 0);
 
   return (
-    <nav className="nav-card sidebar-agents" aria-label="Agents">
+    <nav className="nav-card sidebar-agents" data-hidden={hidden || undefined} aria-label="Agents">
       <div className="sidebar-agents-head">
-        <span className="sidebar-title">Agents</span>
+        <button type="button" className="sidebar-title sidebar-toggle" aria-expanded={!hidden} onClick={onToggle}>
+          <span aria-hidden="true">{hidden ? "▸" : "▾"}</span> Agents
+        </button>
         <button
           type="button"
           className="refresh-btn"
@@ -420,8 +432,8 @@ export function SidebarAgents({ agents, onOpen }: { agents: AgentsState; onOpen:
           <Icon name="refresh" size={14} />
         </button>
       </div>
-      {groups.length === 0 && <p className="nav-hint sidebar-agents-empty">No agents running</p>}
-      {groups.map((g) => (
+      {!hidden && groups.length === 0 && <p className="nav-hint sidebar-agents-empty">No agents running</p>}
+      {!hidden && groups.map((g) => (
         <div key={g.status} className="sidebar-agents-group" data-status={g.status}>
           <span className="sidebar-agents-label">
             {STATUS[g.status].label} <span className="measured">{g.sessions.length}</span>
@@ -753,7 +765,7 @@ export function shortPath(cwd: string): string {
 }
 
 /** "claude-opus-5-5" -> "opus-5-5". */
-function shortModel(model: string | null): string {
+export function shortModel(model: string | null): string {
   return model ? model.replace(/^claude-/, "") : "";
 }
 

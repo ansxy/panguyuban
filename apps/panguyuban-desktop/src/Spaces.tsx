@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { type AgentSession, SpaceStatus, spaceStatus, type TermInfo } from "./api";
+import { shortModel, STATUS } from "./Agents";
 import { maxId, parseSaved, snapshot } from "./spaces_saved";
 import { TerminalView } from "./Terminal";
 
@@ -85,6 +86,10 @@ function mapSplit(node: PaneNode, path: string, f: (split: PaneSplit) => PaneSpl
 
 function currentTabOf(space: Space | undefined): TermTab | undefined {
   return space?.tabs.find((t) => t.id === space.activeTab) ?? space?.tabs.at(-1);
+}
+
+function paneIds(node: PaneNode): string[] {
+  return "pane" in node ? [node.pane] : [...paneIds(node.a), ...paneIds(node.b)];
 }
 
 function findLeaf(node: PaneNode, id: string): PaneLeaf | undefined {
@@ -227,8 +232,30 @@ export function useSpaces(sessions: AgentSession[]) {
     });
   }
 
+  /** Agents running in this space's panes, matched by the pane's foreground process group. */
+  function agentsOf(space: Space): { session: AgentSession; tabId: string; pane: string }[] {
+    return space.tabs.flatMap((t) =>
+      paneIds(t.root).flatMap((pane) => {
+        const session = sessions.find((s) => s.pgid > 0 && s.pgid === paneGroup[pane]);
+        return session ? [{ session, tabId: t.id, pane }] : [];
+      }),
+    );
+  }
+
+  /** Makes `pane` the focused terminal of its tab, that tab current, and its space active. */
+  function showPane(spaceId: string, tabId: string, pane: string): void {
+    updateSpace(spaceId, (s) => ({
+      ...s,
+      activeTab: tabId,
+      tabs: s.tabs.map((t) => (t.id === tabId ? { ...t, focused: pane } : t)),
+    }));
+    setActiveId(spaceId);
+  }
+
   return {
     resizeSplit,
+    agentsOf,
+    showPane,
     list,
     active,
     currentTab,
@@ -258,17 +285,11 @@ export function useSpaces(sessions: AgentSession[]) {
 
 export type SpacesState = ReturnType<typeof useSpaces>;
 
-function badgeHue(name: string): number {
-  let h = 0;
-  for (const c of name) h = (h * 31 + c.charCodeAt(0)) % 360;
-  return h;
-}
-
-/** Sidebar list of spaces: letter badge, folder name, branch, ahead/behind. */
+/** Sidebar list of spaces: monogram badge, folder name, branch, and compact agent rows. */
 export function SidebarSpaces(props: { spaces: SpacesState; onOpen: (id: string) => void }) {
   const { spaces } = props;
   return (
-    <nav className="nav-card" aria-label="Spaces">
+    <nav className="nav-card nav-card--spaces" aria-label="Spaces">
       <div className="nav-group-head">
         <span className="sidebar-title">Spaces</span>
         <button type="button" className="refresh-btn" aria-label="New space" title="New space" onClick={spaces.add}>
@@ -280,42 +301,74 @@ export function SidebarSpaces(props: { spaces: SpacesState; onOpen: (id: string)
         const name = spaceName(cwd);
         const s = spaces.status[cwd];
         const current = space.id === spaces.active?.id;
+        const agents = [...spaces.agentsOf(space)].sort(
+          (a, b) => STATUS[a.session.status].rank - STATUS[b.session.status].rank
+        );
+        const waiting = agents.some((a) => a.session.status === "waiting");
         return (
-          <div key={space.id} className="nav-item space-item" data-current={current || undefined}>
-            <button
-              type="button"
-              className="nav-item-main"
-              aria-current={current ? "page" : undefined}
-              title={cwd}
-              onClick={() => props.onOpen(space.id)}
+          <div key={space.id} className="space-group">
+            <div
+              className="nav-item space-item"
+              data-current={current || undefined}
+              data-attention={waiting || undefined}
             >
-              <span
-                className="nav-glyph space-badge"
-                aria-hidden="true"
-                style={{ "--badge-hue": badgeHue(name) } as React.CSSProperties}
+              <button
+                type="button"
+                className="nav-item-main"
+                aria-current={current ? "page" : undefined}
+                title={cwd}
+                onClick={() => props.onOpen(space.id)}
               >
-                {name.replace(/^[^a-z0-9]+/i, "")[0]?.toUpperCase() ?? "~"}
-              </span>
-              <span className="nav-text">
-                <span className="nav-label">{name}</span>
-              </span>
-              {s?.branch && (
-                <span className="nav-hint space-branch">
-                  {s.ahead > 0 && `↑${s.ahead} `}
-                  {s.behind > 0 && `↓${s.behind} `}
-                  {s.branch}
+                <span className="nav-glyph space-badge" aria-hidden="true">
+                  {name.replace(/^[^a-z0-9]+/i, "")[0]?.toUpperCase() ?? "~"}
                 </span>
-              )}
-            </button>
-            <button
-              type="button"
-              className="refresh-btn space-remove"
-              aria-label={`Close space ${name}`}
-              title="Close space (ends its terminals)"
-              onClick={() => spaces.remove(space.id)}
-            >
-              ×
-            </button>
+                <span className="nav-text">
+                  <span className="nav-label">{name}</span>
+                  {s?.branch && (
+                    <span className="nav-hint space-branch">
+                      {s.ahead > 0 && `↑${s.ahead} `}
+                      {s.behind > 0 && `↓${s.behind} `}
+                      {s.branch}
+                    </span>
+                  )}
+                </span>
+              </button>
+              <button
+                type="button"
+                className="refresh-btn space-remove"
+                aria-label={`Close space ${name}`}
+                title="Close space (ends its terminals)"
+                onClick={() => spaces.remove(space.id)}
+              >
+                ×
+              </button>
+            </div>
+            {agents.length > 0 && (
+              <div className="space-agents">
+                {agents.map(({ session: a, tabId, pane }) => {
+                  const model = shortModel(a.model);
+                  return (
+                    <button
+                      key={pane}
+                      type="button"
+                      className="space-agent"
+                      data-status={a.status}
+                      title={`${a.name}${model ? ` (${model})` : ""} — ${STATUS[a.status].label} — ${a.cwd}`}
+                      onClick={() => {
+                        spaces.showPane(space.id, tabId, pane);
+                        props.onOpen(space.id);
+                      }}
+                    >
+                      <span className="status-glyph" aria-label={STATUS[a.status].label}>
+                        {STATUS[a.status].glyph}
+                      </span>
+                      <span className="space-agent-name">{a.name}</span>
+                      {model && <span className="space-agent-model">{model}</span>}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </div>
         );
       })}

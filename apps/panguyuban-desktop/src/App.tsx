@@ -22,7 +22,7 @@ import {
   WorkspaceConfig,
 } from "./api";
 import { DiffFiles, FilterTabs, Icon, type IconName, Logo } from "./ui";
-import { AgentsView, shortPath, SidebarAgents, useAgents } from "./Agents";
+import { AgentsView, shortPath, useAgents } from "./Agents";
 import { BuilderView, canTeamReview, startTeamReview, useBuilder } from "./Builder";
 import { agentById } from "./builder_flow";
 import { ProvidersSection } from "./ProvidersSettings";
@@ -671,16 +671,6 @@ export function App(): React.JSX.Element {
             />
 )}
           </nav>
-
-          {!layout.sidebarCollapsed && features.agents && (
-            <SidebarAgents
-              agents={agents}
-              onOpen={(id) => {
-                agents.setSelectedId(id);
-                handleMenuSelect("agents");
-              }}
-            />
-          )}
 
           <nav className="nav-card nav-card--bottom" aria-label="System">
             <NavItem
